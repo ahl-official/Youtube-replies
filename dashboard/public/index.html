@@ -7,23 +7,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@600&display=swap" rel="stylesheet">
-  <link id="desk-styles" rel="stylesheet" href="/styles.minimize.css">
-  <script>
-    var lookFiles = {
-      classic: '/styles.classic.css',
-      agencia: '/styles.agencia.css',
-      minimize: '/styles.minimize.css'
-    };
-    var savedLook = localStorage.getItem('ahl-look');
-    var activeLook = localStorage.getItem('ahl-preview') === 'done'
-      ? (lookFiles[savedLook] ? savedLook : 'agencia')
-      : 'minimize';
-    document.getElementById('desk-styles').href = lookFiles[activeLook];
-  </script>
+  <link rel="stylesheet" href="/styles.css?v=3">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <div id="app"></div>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

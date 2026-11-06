@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const channel = require('./channel');
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
@@ -81,6 +82,51 @@ const docCache = { at: 0, rows: null };
 function invalidateDocs() {
   docCache.at = 0;
   docCache.rows = null;
+  idCache.at = 0;
+  idCache.ids = null;
+}
+
+const idCache = { at: 0, ids: null };
+async function knownVideoIds() {
+  if (idCache.ids && Date.now() - idCache.at < 30000) return idCache.ids;
+  const ids = new Set();
+  for (let from = 0; from < 20000; from += 1000) {
+    const page = await sb('/documents?select=metadata&order=id.asc', {
+      headers: { Range: `${from}-${from + 999}` },
+    });
+    for (const row of page || []) {
+      const id = row.metadata && row.metadata.videoId;
+      if (id) ids.add(id);
+    }
+    if (!page || page.length < 1000) break;
+  }
+  idCache.at = Date.now();
+  idCache.ids = ids;
+  return ids;
+}
+
+function channelDeps() {
+  const { env, url, key } = supabaseConfig();
+  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+  return {
+    env: () => env,
+    knownIds: knownVideoIds,
+    ingest,
+    async storageGet(name) {
+      const response = await fetch(`${url}/storage/v1/object/${channel.STATE_BUCKET}/${name}`, { headers });
+      if (response.status === 404) return '';
+      if (!response.ok) throw new Error(`Could not read ingest state (${response.status})`);
+      return response.text();
+    },
+    async storagePut(name, body) {
+      const response = await fetch(`${url}/storage/v1/object/${channel.STATE_BUCKET}/${name}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json', 'x-upsert': 'true' },
+        body,
+      });
+      if (!response.ok) throw new Error(`Could not save ingest state (${response.status})`);
+    },
+  };
 }
 
 async function allDocuments(options = {}) {
@@ -405,6 +451,22 @@ async function handleApi(req, res, url) {
     return send(res, 200, { row: rows && rows[0] });
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/knowledge/uploads') {
+    const id = url.searchParams.get('id') || '';
+    if (id) {
+      const result = await channel.uploadStatus(channelDeps(), id);
+      if (result.phase === 'done') invalidateDocs();
+      return send(res, 200, result);
+    }
+    return send(res, 200, await channel.newUploads(channelDeps()));
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/knowledge/uploads') {
+    const body = await readBody(req);
+    const result = await channel.beginUpload(channelDeps(), body);
+    return send(res, 202, result);
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/knowledge') {
     const groups = groupRows(await allDocuments());
     const key = url.searchParams.get('key');
@@ -480,9 +542,23 @@ async function handleApi(req, res, url) {
   send(res, 404, { error: 'Not found' });
 }
 
+function requestUrl(req) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '127.0.0.1';
+  const incoming = req.url || '/';
+  if (incoming.startsWith('/api/')) return new URL(incoming, `http://${host}`);
+  const forwarded = req.headers['x-forwarded-uri'] || req.headers['x-vercel-original-url'] || '';
+  if (String(forwarded).includes('/api/')) return new URL(forwarded, `http://${host}`);
+  const invoke = req.headers['x-invoke-path'] || '';
+  if (String(invoke).startsWith('/api/')) {
+    const query = incoming.includes('?') ? incoming.slice(incoming.indexOf('?')) : '';
+    return new URL(`${invoke}${String(invoke).includes('?') ? '' : query}`, `http://${host}`);
+  }
+  return new URL(incoming, `http://${host}`);
+}
+
 async function handleRequest(req, res) {
   try {
-    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const url = requestUrl(req);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     const rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
     const root = path.resolve(PUBLIC);

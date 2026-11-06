@@ -47,36 +47,6 @@ function ensureShell() {
     ]),
     h('main', { id: 'main', class: 'main' }, []),
   ]));
-  mountLookPreview();
-}
-
-const LOOK_FILES = {
-  classic: '/styles.classic.css',
-  agencia: '/styles.agencia.css',
-  minimize: '/styles.minimize.css',
-};
-
-function applyLook(choice) {
-  const link = document.querySelector('#desk-styles');
-  if (link && LOOK_FILES[choice]) link.href = `${LOOK_FILES[choice]}?v=2`;
-}
-
-function mountLookPreview() {
-  if (localStorage.getItem('ahl-preview') === 'done' || document.querySelector('.look-bar')) return;
-  document.body.append(h('div', { class: 'look-bar', role: 'region', 'aria-label': 'Design preview' }, [
-    h('p', {}, ['Minimaze light preview. Review, edit, and discard still work the same.']),
-    h('button', { type: 'button', class: 'btn', onclick: () => chooseLook('minimize') }, ['Approve look']),
-    h('button', { type: 'button', class: 'btn-ghost', onclick: () => chooseLook('discard') }, ['Discard look']),
-  ]));
-}
-
-function chooseLook(choice) {
-  const previous = LOOK_FILES[localStorage.getItem('ahl-look')] ? localStorage.getItem('ahl-look') : 'agencia';
-  const next = choice === 'discard' ? previous : choice;
-  localStorage.setItem('ahl-look', next);
-  localStorage.setItem('ahl-preview', 'done');
-  applyLook(next);
-  document.querySelector('.look-bar')?.remove();
 }
 
 function setStatus(text, kind) {
@@ -131,7 +101,6 @@ function setupScreen() {
     h('p', { class: 'lede' }, ['The review queue and knowledge base are in Supabase. Paste the project URL and service role key once.']),
     form,
   ]));
-  mountLookPreview();
 }
 
 async function saveSetup(event) {
@@ -364,6 +333,80 @@ function commentCard(row) {
   ]);
 }
 
+function uploadPhrase(count, singular, plural) {
+  const noun = count === 1 ? singular : plural;
+  const verb = count === 1 ? 'was' : 'were';
+  return `${count} new ${noun} ${verb} added on the channel.`;
+}
+
+function uploadBanner(uploads) {
+  if (uploads.error) return h('div', { class: 'banner error', role: 'alert' }, [uploads.error]);
+  const limited = uploads.rateLimitedUntil && Date.parse(uploads.rateLimitedUntil) > Date.now();
+  if (limited) {
+    return h('div', { class: 'banner', role: 'status' }, [
+      `YouTube is limiting downloads until ${new Date(uploads.rateLimitedUntil).toLocaleString()}. New uploads will stay listed until then.`,
+    ]);
+  }
+  const lines = [];
+  if (uploads.videos.length) lines.push(uploadPhrase(uploads.videos.length, 'video', 'videos'));
+  if (uploads.shorts.length) lines.push(uploadPhrase(uploads.shorts.length, 'short', 'shorts'));
+  if (!lines.length) return null;
+  const actions = h('div', { class: 'actions' });
+  if (uploads.videos.length) {
+    actions.append(h('button', {
+      type: 'button',
+      class: 'btn',
+      id: 'add-videos',
+      onclick: () => addUploads('video', uploads.videos),
+    }, [`Add ${uploads.videos.length} ${uploads.videos.length === 1 ? 'video' : 'videos'}`]));
+  }
+  if (uploads.shorts.length) {
+    actions.append(h('button', {
+      type: 'button',
+      class: 'btn',
+      id: 'add-shorts',
+      onclick: () => addUploads('short', uploads.shorts),
+    }, [`Add ${uploads.shorts.length} ${uploads.shorts.length === 1 ? 'short' : 'shorts'}`]));
+  }
+  return h('div', { class: 'banner upload-banner', role: 'status' }, [
+    h('p', {}, [lines.join(' ')]),
+    actions,
+  ]);
+}
+
+async function addUploads(type, items) {
+  const noun = type === 'short' ? 'short' : 'video';
+  const plural = type === 'short' ? 'shorts' : 'videos';
+  for (const button of document.querySelectorAll('#add-videos, #add-shorts')) button.disabled = true;
+  let added = 0;
+  let skipped = 0;
+  try {
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      setStatus(`Adding ${index + 1} of ${items.length} ${items.length === 1 ? noun : plural}. Downloading audio…`, 'loading');
+      await api('/api/knowledge/uploads', { method: 'POST', body: { id: item.id, type: item.type } });
+      const deadline = Date.now() + 20 * 60 * 1000;
+      let result = { phase: 'transcribing' };
+      while (result.phase === 'transcribing' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        setStatus(`Adding ${index + 1} of ${items.length} ${items.length === 1 ? noun : plural}. Transcribing…`, 'loading');
+        result = await api(`/api/knowledge/uploads?id=${encodeURIComponent(item.id)}`);
+      }
+      if (result.phase === 'done') added += 1;
+      else if (result.phase === 'skipped') skipped += 1;
+      else throw new Error('Transcription is still running. Open Knowledge again in a minute and press the button to continue.');
+    }
+    const parts = [];
+    if (added) parts.push(`Added ${added} ${added === 1 ? noun : plural} to the knowledge base.`);
+    if (skipped) parts.push(`${skipped} had no spoken audio, so ${skipped === 1 ? 'it was' : 'they were'} skipped.`);
+    setStatus(parts.join(' ') || 'Nothing new was added.');
+    await render();
+  } catch (err) {
+    setStatus(err.message, 'error');
+    for (const button of document.querySelectorAll('#add-videos, #add-shorts')) button.disabled = false;
+  }
+}
+
 async function renderKnowledge() {
   const body = h('div', { class: 'grid' });
   if (!health.documents) {
@@ -382,8 +425,13 @@ async function renderKnowledge() {
     return;
   }
   setStatus('');
-  const data = await api(`/api/knowledge?q=${encodeURIComponent(state.query)}`);
+  const [data, uploads] = await Promise.all([
+    api(`/api/knowledge?q=${encodeURIComponent(state.query)}`),
+    api('/api/knowledge/uploads').catch((err) => ({ error: err.message, videos: [], shorts: [] })),
+  ]);
   const list = h('div');
+  const banner = uploadBanner(uploads);
+  if (banner) list.append(banner);
   const search = h('input', {
     id: 'knowledge-search',
     type: 'search',
@@ -418,7 +466,7 @@ async function renderKnowledge() {
     h('label', { for: 'doc-text' }, ['Text']),
     h('textarea', { id: 'doc-text', name: 'text', required: true, placeholder: 'Facts the bot is allowed to use' }),
     h('button', { class: 'btn', type: 'submit' }, ['Add to knowledge base']),
-    h('p', { class: 'meta', id: 'add-note' }, ['New videos show up here after ingest_local.js finishes. The newest inserts are marked Latest.']),
+    h('p', { class: 'meta', id: 'add-note' }, ['New channel uploads are listed above. A document added here is embedded by the ingest webhook.']),
   ]);
   body.append(list, form);
   layout(
