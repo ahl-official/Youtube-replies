@@ -1,0 +1,200 @@
+{
+  "name": "AHL - Knowledge Base Ingestion (Videos + Docs)",
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": "documents",
+        "options": {
+          "queryName": "match_documents"
+        }
+      },
+      "id": "i12",
+      "name": "Save to Knowledge Base",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "textSplittingMode": "custom",
+        "jsonData": "={{ $json.text }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "source",
+                "value": "={{ $json.source }}"
+              },
+              {
+                "name": "type",
+                "value": "={{ $json.type }}"
+              },
+              {
+                "name": "videoId",
+                "value": "={{ $json.videoId }}"
+              },
+              {
+                "name": "title",
+                "value": "={{ $json.title }}"
+              },
+              {
+                "name": "start",
+                "value": "={{ $json.start }}"
+              },
+              {
+                "name": "url",
+                "value": "={{ $json.url }}"
+              },
+              {
+                "name": "transcript",
+                "value": "={{ $json.transcript }}"
+              },
+              {
+                "name": "language",
+                "value": "={{ $json.language }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "i13",
+      "name": "Document Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        2120,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "chunkSize": 4000,
+        "chunkOverlap": 0,
+        "options": {}
+      },
+      "id": "i17",
+      "name": "Text Splitter (keep chunks whole)",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        2120,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "model": "openai/text-embedding-3-small",
+        "options": {}
+      },
+      "id": "i14",
+      "name": "Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2300,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ahl-ingest",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "w1",
+      "name": "Add External Knowledge (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        760
+      ],
+      "webhookId": "ahl-ingest-knowledge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// External knowledge: POST {title, text, source?} -> chunks of ~350 words\n// Or pre-chunked AssemblyAI transcripts: {title, videoId, type, transcript, language, chunks:[{text,start,url}]}\nconst body = $json.body || $json;\nif (Array.isArray(body.chunks)) {\n  return body.chunks.filter((c) => c && c.text).map((c) => ({ json: {\n    text: String(c.text),\n    source: 'youtube',\n    videoId: body.videoId || '',\n    type: body.type || 'video',\n    title: body.title || 'Video',\n    start: c.start || 0,\n    url: c.url || '',\n    transcript: body.transcript || 'universal-2',\n    language: body.language || '',\n  }}));\n}\nconst title = body.title || 'External document';\nconst source = body.source || 'external';\nconst text = String(body.text || '').replace(/\\s+/g, ' ').trim();\nif (!text) throw new Error('Body needs a \"text\" field');\nconst w = text.split(' ');\nconst out = [];\nfor (let i = 0; i < w.length; i += 350) {\n  out.push({ json: {\n    text: w.slice(i, i + 350).join(' '),\n    source: 'external',\n    type: 'document',\n    videoId: '',\n    title,\n    start: 0,\n    url: /^https?:/.test(source) ? source : '',\n    transcript: '',\n    language: '',\n  }});\n}\nreturn out;"
+      },
+      "id": "w2",
+      "name": "Chunk External Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        760
+      ]
+    }
+  ],
+  "connections": {
+    "Save to Knowledge Base": {
+      "main": [
+        []
+      ]
+    },
+    "Document Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Save to Knowledge Base",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Splitter (keep chunks whole)": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Document Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Save to Knowledge Base",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add External Knowledge (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Chunk External Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk External Text": {
+      "main": [
+        [
+          {
+            "node": "Save to Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "ahl-desk",
+  "private": true,
+  "description": "Local desk for American Hairline comment review and the knowledge base",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
