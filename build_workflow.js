@@ -111,6 +111,47 @@ const nodes = [
   },
   {
     parameters: {
+      httpMethod: 'POST',
+      path: 'ahl-post-reply',
+      authentication: 'headerAuth',
+      responseMode: 'lastNode',
+      options: {},
+    },
+    id: 'n1c', name: 'Post One Reply Hook', type: 'n8n-nodes-base.webhook', typeVersion: 2,
+    position: [0, 720], webhookId: 'ahl-post-reply',
+    credentials: { httpHeaderAuth: { id: 'EBYqE8OYpGo83wMT', name: 'AHL Ingest Webhook Key' } },
+  },
+  {
+    parameters: {
+      method: 'POST',
+      url: 'https://www.googleapis.com/youtube/v3/comments',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [{ name: 'part', value: 'snippet' }] },
+      sendBody: true,
+      specifyBody: 'json',
+      jsonBody: '={{ JSON.stringify({ snippet: { parentId: $json.body.commentId, textOriginal: $json.body.text } }) }}',
+      options: {},
+    },
+    id: 'n12b', name: 'Post One Reply', type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position: [280, 720], onError: 'continueRegularOutput',
+  },
+  {
+    parameters: {
+      jsCode: `const item = $input.first().json;
+if (item.error) {
+  const raw = item.error.description || item.error.message || 'YouTube did not accept the reply';
+  const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);
+  return [{ json: { ok: false, error } }];
+}
+if (!item.id) return [{ json: { ok: false, error: 'YouTube did not return a reply id' } }];
+return [{ json: { ok: true, id: item.id } }];`,
+    },
+    id: 'n12c', name: 'Post One Reply Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [560, 720],
+  },
+  {
+    parameters: {
       assignments: { assignments: [
         { id: 'a1', name: 'channelId', value: CHANNEL_ID, type: 'string' },
         { id: 'a2', name: 'minConfidence', value: 0.75, type: 'number' },
@@ -305,6 +346,8 @@ const main = (node) => ({ node, type: 'main', index: 0 });
 const connections = {
   'Every 5 Minutes': { main: [[main('Config')]] },
   'Review Comments': { main: [[main('Config')]] },
+  'Post One Reply Hook': { main: [[main('Post One Reply')]] },
+  'Post One Reply': { main: [[main('Post One Reply Result')]] },
   'Config': { main: [[main('Fetch Channel Comments')]] },
   'Fetch Channel Comments': { main: [[main('Filter New Comments')]] },
   'Filter New Comments': { main: [[main('Video Chunks')]] },

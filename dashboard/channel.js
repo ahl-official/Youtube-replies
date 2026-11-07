@@ -126,6 +126,16 @@ async function newUploads(deps) {
   };
 }
 
+const IOS_CLIENT = {
+  clientName: 'IOS',
+  clientVersion: '20.10.4',
+  deviceMake: 'Apple',
+  deviceModel: 'iPhone16,2',
+  osName: 'iOS',
+  osVersion: '18.3.2.22D82',
+};
+const IOS_AGENT = 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)';
+
 function localBinary() {
   const command = process.platform === 'win32' ? 'where.exe' : 'which';
   const found = spawnSync(command, ['yt-dlp'], { encoding: 'utf8' });
@@ -133,20 +143,7 @@ function localBinary() {
   return found.status === 0 && line ? line : '';
 }
 
-async function ytDlpBinary() {
-  const found = localBinary();
-  if (found) return found;
-  const dest = path.join(os.tmpdir(), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
-  if (fs.existsSync(dest)) return dest;
-  const name = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp_linux';
-  const response = await fetch(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/${name}`);
-  if (!response.ok) throw bad(502, 'Could not prepare the audio downloader');
-  fs.writeFileSync(dest, Buffer.from(await response.arrayBuffer()));
-  if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
-  return dest;
-}
-
-function downloadAudio(bin, id) {
+function downloadWithYtDlp(bin, id) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ahl-'));
   const pattern = path.join(dir, `${id}.%(ext)s`);
   const result = spawnSync(bin, [
@@ -171,9 +168,56 @@ function downloadAudio(bin, id) {
   const fileName = fs.existsSync(dir) && fs.readdirSync(dir).find((name) => name.startsWith(`${id}.`));
   if (!fileName) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    throw bad(502, 'The audio download did not finish. Try this upload again in a few minutes.');
+    const detail = log.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '';
+    throw bad(502, detail ? `The audio download did not finish. ${detail.slice(0, 180)}` : 'The audio download did not finish. Try this upload again in a few minutes.');
   }
   return { dir, file: path.join(dir, fileName) };
+}
+
+async function playerAudioUrl(id) {
+  const page = await fetch(`https://www.youtube.com/watch?v=${id}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en-US,en;q=0.9' },
+  });
+  const html = await page.text();
+  const key = (html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || [])[1] || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+  const response = await fetch(`https://www.youtube.com/youtubei/v1/player?prettyPrint=false&key=${key}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': IOS_AGENT },
+    body: JSON.stringify({ videoId: id, context: { client: { ...IOS_CLIENT, hl: 'en', gl: 'US' } } }),
+  });
+  const data = await response.json();
+  const playable = data.playabilityStatus || {};
+  if (playable.status === 'LOGIN_REQUIRED') throw bad(502, 'YouTube blocks this download on the website. On your computer, run Start desk.bat and open http://127.0.0.1:4173, then click Add there.');
+  const formats = [...(data.streamingData?.formats || []), ...(data.streamingData?.adaptiveFormats || [])];
+  const audio = formats
+    .filter((format) => format.url && /^audio\/mp4/i.test(format.mimeType || ''))
+    .sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
+  const pick = audio.find((format) => (format.bitrate || 0) >= 48000) || audio[0];
+  if (!pick) throw bad(502, playable.reason || 'YouTube did not provide an audio file for this video.');
+  return pick.url;
+}
+
+async function downloadWithPlayer(id) {
+  const url = await playerAudioUrl(id);
+  const response = await fetch(url, { headers: { 'User-Agent': IOS_AGENT }, signal: AbortSignal.timeout(40000) });
+  if (response.status === 429) {
+    const err = bad(429, 'YouTube is limiting downloads. Wait about 30 minutes, then try again.');
+    err.rateLimited = true;
+    throw err;
+  }
+  if (!response.ok) throw bad(502, `The audio download did not finish (${response.status}). Try again in a few minutes.`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length < 1000) throw bad(502, 'The audio download did not finish. Try this upload again in a few minutes.');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ahl-'));
+  const file = path.join(dir, `${id}.m4a`);
+  fs.writeFileSync(file, bytes);
+  return { dir, file };
+}
+
+async function downloadAudio(id) {
+  const bin = localBinary();
+  if (bin) return downloadWithYtDlp(bin, id);
+  return downloadWithPlayer(id);
 }
 
 async function aai(env, pathname, options = {}) {
@@ -221,7 +265,7 @@ async function beginUpload(deps, body) {
   if (fresh.rateLimitedUntil) throw bad(429, `YouTube is limiting downloads until ${new Date(fresh.rateLimitedUntil).toLocaleString()}.`);
   let downloaded;
   try {
-    downloaded = downloadAudio(await ytDlpBinary(), id);
+    downloaded = await downloadAudio(id);
     const uploaded = await aai(deps.env(), '/upload', {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },

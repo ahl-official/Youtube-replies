@@ -146,7 +146,7 @@ async function renderReview() {
       'The comment_log table is missing. Run the bottom of schema.sql in the Supabase SQL editor, then reload this page.',
     ]));
   } else {
-    const data = await api(`/api/comments?status=${encodeURIComponent(state.status)}&handled=${state.handled}`);
+    const data = await api(`/api/comments?status=${encodeURIComponent(state.status)}`);
     summary = data.summary || {};
     setStatus('');
     if (health.webhook) {
@@ -158,14 +158,6 @@ async function renderReview() {
     }
     body.append(h('p', { class: 'filter-label', id: 'stage-label' }, ['Stage']));
     body.append(h('div', { class: 'filters', id: 'stage-filters', role: 'group', 'aria-labelledby': 'stage-label' }, STATUS.map(([value, label]) => stageChip(value, label))));
-    if (state.status !== 'discarded') {
-      body.append(h('p', { class: 'filter-label', id: 'handled-label' }, ['Handled']));
-      body.append(h('div', { class: 'filters', role: 'group', 'aria-labelledby': 'handled-label' }, [
-        h('button', { type: 'button', class: `chip${state.handled === 'false' ? ' active' : ''}`, 'aria-pressed': state.handled === 'false' ? 'true' : 'false', onclick: () => { state.handled = 'false'; render(); } }, ['Still open']),
-        h('button', { type: 'button', class: `chip${state.handled === 'true' ? ' active' : ''}`, 'aria-pressed': state.handled === 'true' ? 'true' : 'false', onclick: () => { state.handled = 'true'; render(); } }, ['Handled']),
-        h('button', { type: 'button', class: `chip${state.handled === '' ? ' active' : ''}`, 'aria-pressed': state.handled === '' ? 'true' : 'false', onclick: () => { state.handled = ''; render(); } }, ['Either']),
-      ]));
-    }
     const list = h('div', { class: 'list' });
     if (!data.rows.length) list.append(h('div', { class: 'empty' }, ['Nothing in this filter.']));
     for (const row of data.rows) list.append(commentCard(row));
@@ -173,7 +165,7 @@ async function renderReview() {
   }
   layout(
     'YouTube reply desk',
-    'Click Review comments to check the last 48 hours. Replies are saved here. Nothing is posted to YouTube.',
+    'Click Review comments to check the last 48 hours. Post reply publishes that one reply on YouTube.',
     body,
     'Comments',
   );
@@ -261,6 +253,8 @@ function openReplyEditor(card, row) {
         const data = await api(`/api/comments/${row.id}/reply`, { method: 'POST', body: { reply: area.value } });
         row.reply = data.row ? data.row.reply : area.value;
         showReply(box, row);
+        const post = card.querySelector('[data-post]');
+        if (post) post.hidden = !String(row.reply || '').trim();
         setStatus('Reply saved.');
       } catch (err) {
         save.disabled = false;
@@ -279,6 +273,34 @@ function openReplyEditor(card, row) {
   area.focus();
 }
 
+function statusLabel(status) {
+  const labels = {
+    needs_human: 'Needs a person',
+    drafted: 'Draft',
+    replied: 'Posted',
+    skipped: 'Skipped',
+    error: 'Error',
+    discarded: 'Discarded',
+  };
+  return labels[status] || String(status || '').replace('_', ' ');
+}
+
+async function postReply(button, row) {
+  button.disabled = true;
+  const previous = button.textContent;
+  button.textContent = 'Posting…';
+  setStatus('Posting on YouTube…', 'loading');
+  try {
+    await api(`/api/comments/${row.id}/post`, { method: 'POST' });
+    await render();
+    setStatus('Posted on YouTube.');
+  } catch (err) {
+    button.disabled = false;
+    button.textContent = previous;
+    setStatus(err.message, 'error');
+  }
+}
+
 function commentCard(row) {
   const when = row.created_at ? new Date(row.created_at).toLocaleString() : '';
   const video = row.video_id ? `https://www.youtube.com/watch?v=${row.video_id}` : '';
@@ -288,7 +310,7 @@ function commentCard(row) {
         h('strong', {}, [row.author || 'Viewer']),
         h('div', { class: 'meta' }, [`${row.category || 'uncategorized'} · ${when}`]),
       ]),
-      h('span', { class: `pill${row.handled ? ' good' : ''}` }, [row.handled ? 'Handled' : (row.status || '').replace('_', ' ')]),
+      h('span', { class: `pill${row.status === 'replied' ? ' good' : ''}` }, [statusLabel(row.status)]),
     ]),
     h('p', { class: 'comment' }, [row.comment || '']),
     row.reason ? h('p', { class: 'meta' }, [`Bot note: ${row.reason}`]) : h('span'),
@@ -300,14 +322,13 @@ function commentCard(row) {
         class: 'btn-ghost',
         onclick: (event) => openReplyEditor(event.currentTarget.closest('.card'), row),
       }, ['Edit reply']),
-      h('button', {
+      row.status === 'replied' || row.status === 'discarded' ? h('span') : h('button', {
         class: 'btn',
-        onclick: async (event) => {
-          event.currentTarget.disabled = true;
-          await api(`/api/comments/${row.id}/handled`, { method: 'POST', body: { handled: !row.handled } });
-          render();
-        },
-      }, [row.handled ? 'Mark open' : 'Mark handled']),
+        type: 'button',
+        'data-post': 'true',
+        hidden: !String(row.reply || '').trim(),
+        onclick: (event) => postReply(event.currentTarget, row),
+      }, ['Post reply']),
       row.status === 'discarded' ? h('span') : h('button', {
         class: 'btn danger',
         onclick: async (event) => {
@@ -339,10 +360,14 @@ function uploadPhrase(count, singular, plural) {
   return `${count} new ${noun} ${verb} added on the channel.`;
 }
 
+function canAddUploadsHere() {
+  return location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+}
+
 function uploadBanner(uploads) {
   if (uploads.error) return h('div', { class: 'banner error', role: 'alert' }, [uploads.error]);
   const limited = uploads.rateLimitedUntil && Date.parse(uploads.rateLimitedUntil) > Date.now();
-  if (limited) {
+  if (limited && canAddUploadsHere()) {
     return h('div', { class: 'banner', role: 'status' }, [
       `YouTube is limiting downloads until ${new Date(uploads.rateLimitedUntil).toLocaleString()}. New uploads will stay listed until then.`,
     ]);
@@ -351,6 +376,8 @@ function uploadBanner(uploads) {
   if (uploads.videos.length) lines.push(uploadPhrase(uploads.videos.length, 'video', 'videos'));
   if (uploads.shorts.length) lines.push(uploadPhrase(uploads.shorts.length, 'short', 'shorts'));
   if (!lines.length) return null;
+  const parts = [h('p', {}, [lines.join(' ')])];
+  if (!canAddUploadsHere()) return h('div', { class: 'banner upload-banner', role: 'status' }, parts);
   const actions = h('div', { class: 'actions' });
   if (uploads.videos.length) {
     actions.append(h('button', {
@@ -368,10 +395,8 @@ function uploadBanner(uploads) {
       onclick: () => addUploads('short', uploads.shorts),
     }, [`Add ${uploads.shorts.length} ${uploads.shorts.length === 1 ? 'short' : 'shorts'}`]));
   }
-  return h('div', { class: 'banner upload-banner', role: 'status' }, [
-    h('p', {}, [lines.join(' ')]),
-    actions,
-  ]);
+  parts.push(actions);
+  return h('div', { class: 'banner upload-banner', role: 'status' }, parts);
 }
 
 async function addUploads(type, items) {
@@ -466,7 +491,11 @@ async function renderKnowledge() {
     h('label', { for: 'doc-text' }, ['Text']),
     h('textarea', { id: 'doc-text', name: 'text', required: true, placeholder: 'Facts the bot is allowed to use' }),
     h('button', { class: 'btn', type: 'submit' }, ['Add to knowledge base']),
-    h('p', { class: 'meta', id: 'add-note' }, ['New channel uploads are listed above. A document added here is embedded by the ingest webhook.']),
+    h('p', { class: 'meta', id: 'add-note' }, [
+      canAddUploadsHere()
+        ? 'New channel uploads are listed above. A document added here is embedded by the ingest webhook.'
+        : 'A document added here is embedded by the ingest webhook. New videos are added from the desk on your computer.',
+    ]),
   ]);
   body.append(list, form);
   layout(

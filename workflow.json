@@ -48,6 +48,73 @@
     },
     {
       "parameters": {
+        "httpMethod": "POST",
+        "path": "ahl-post-reply",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "n1c",
+      "name": "Post One Reply Hook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        720
+      ],
+      "webhookId": "ahl-post-reply",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "EBYqE8OYpGo83wMT",
+          "name": "AHL Ingest Webhook Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/youtube/v3/comments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ snippet: { parentId: $json.body.commentId, textOriginal: $json.body.text } }) }}",
+        "options": {}
+      },
+      "id": "n12b",
+      "name": "Post One Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        720
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nif (item.error) {\n  const raw = item.error.description || item.error.message || 'YouTube did not accept the reply';\n  const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);\n  return [{ json: { ok: false, error } }];\n}\nif (!item.id) return [{ json: { ok: false, error: 'YouTube did not return a reply id' } }];\nreturn [{ json: { ok: true, id: item.id } }];"
+      },
+      "id": "n12c",
+      "name": "Post One Reply Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        720
+      ]
+    },
+    {
+      "parameters": {
         "assignments": {
           "assignments": [
             {
@@ -504,6 +571,28 @@
         [
           {
             "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post One Reply Hook": {
+      "main": [
+        [
+          {
+            "node": "Post One Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post One Reply": {
+      "main": [
+        [
+          {
+            "node": "Post One Reply Result",
             "type": "main",
             "index": 0
           }

@@ -13,6 +13,7 @@ const fresh = JSON.parse(fs.readFileSync(path.join(__dirname, 'workflow.json'), 
   const liveCred = (name) => (wf.nodes.find((n) => n.name === name) || {}).credentials;
   const borrow = {
     'Post Reply to YouTube': 'Fetch Channel Comments',
+    'Post One Reply': 'Fetch Channel Comments',
     'Log: Replied': 'Knowledge Base (Supabase)',
     'Log: Needs Human / Skipped': 'Knowledge Base (Supabase)',
     'Video Chunks': 'Knowledge Base (Supabase)',

@@ -194,6 +194,36 @@ function findGroup(rows, key) {
   return groupRows(rows).find((group) => group.key === key) || null;
 }
 
+async function postYouTubeReply(commentId, text) {
+  const env = loadEnv();
+  const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
+  const webhookKey = env.N8N_WEBHOOK_KEY;
+  if (!base || !webhookKey) {
+    const err = new Error('N8N_BASE_URL and N8N_WEBHOOK_KEY are missing from the environment');
+    err.status = 400;
+    throw err;
+  }
+  const header = env.N8N_WEBHOOK_HEADER || 'x-api-key';
+  const response = await fetch(`${base}/webhook/ahl-post-reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', [header]: webhookKey },
+    body: JSON.stringify({ commentId, text }),
+  });
+  const raw = await response.text();
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+  const payload = Array.isArray(data) ? data[0] : data;
+  const body = payload && payload.json ? payload.json : payload;
+  if (!response.ok || !body || body.ok === false || !body.id) {
+    const rawMessage = body && (body.error || body.message);
+    const message = typeof rawMessage === 'string' ? rawMessage : 'YouTube did not accept the reply';
+    const err = new Error(message.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300));
+    err.status = 502;
+    throw err;
+  }
+  return body.id;
+}
+
 async function ingest(payload) {
   const env = loadEnv();
   const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
@@ -439,6 +469,25 @@ async function handleApi(req, res, url) {
     });
     if (!rows || !rows[0]) return send(res, 404, { error: 'That comment is no longer in the log' });
     return send(res, 200, { row: rows[0] });
+  }
+
+  const postMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/post$/);
+  if (req.method === 'POST' && postMatch) {
+    const rows = await sb(`/comment_log?id=eq.${postMatch[1]}&select=id,comment_id,reply,status,youtube_reply_id`);
+    const row = rows && rows[0];
+    if (!row) return send(res, 404, { error: 'That comment is no longer in the log' });
+    if (row.status === 'discarded') return send(res, 400, { error: 'Discarded comments are not posted' });
+    if (row.status === 'replied' || row.youtube_reply_id) return send(res, 400, { error: 'This reply is already on YouTube' });
+    const text = String(row.reply || '').trim();
+    if (!text) return send(res, 400, { error: 'Write a reply before posting it' });
+    if (!row.comment_id) return send(res, 400, { error: 'This comment has no YouTube id' });
+    const youtubeId = await postYouTubeReply(row.comment_id, text);
+    const updated = await sb(`/comment_log?id=eq.${row.id}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ status: 'replied', youtube_reply_id: youtubeId, error_message: '' }),
+    });
+    return send(res, 200, { row: updated && updated[0] });
   }
 
   const discardMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/discard$/);

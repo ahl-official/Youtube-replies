@@ -128,6 +128,7 @@ h2 {
 .status { min-height: 1.25rem; margin: 0.35rem 0 0; color: var(--good); font-size: 0.875rem; }
 .status:empty { display: none; }
 .status.loading { color: var(--quiet); }
+.status.error { color: #ffc7be; }
 
 .filter-label {
   margin: 1.5rem 0 0.45rem;

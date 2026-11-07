@@ -17,6 +17,7 @@ const TABS = [
   { type: 'short', url: 'https://www.youtube.com/@AmericanHairline/shorts' },
 ];
 const LIMIT = +((process.argv.find((a) => a.startsWith('--limit=')) || '--limit=10').slice(8));
+const ONLY = (process.argv.find((a) => a.startsWith('--id=')) || '').slice(5);
 const PAUSE_MS = 8000;
 const WORDS_PER_CHUNK = 350;
 const TRANSCRIPT_TAG = 'universal-2';
@@ -175,7 +176,11 @@ function chunkWords(words, id, type) {
   const later = new Set(state.later);
   const ordered = [...pending.filter((v) => !later.has(v.id)), ...pending.filter((v) => later.has(v.id))];
   console.log(`Channel has ${videos.length} videos. Ingested: ${state.done.length}. Skipped, no spoken audio: ${state.failed.length}. Still to do: ${pending.length}. Model: ${TRANSCRIPT_TAG}.`);
-  const todo = ordered.slice(0, LIMIT);
+  const todo = ONLY ? ordered.filter((video) => video.id === ONLY) : ordered.slice(0, LIMIT);
+  if (ONLY && !todo.length) {
+    console.log(state.done.includes(ONLY) ? 'That video is already in the knowledge base.' : 'That video is not in the remaining channel list.');
+    return;
+  }
   if (!todo.length) { console.log('Nothing new to transcribe.'); return; }
   if (DRY) {
     for (const v of todo) console.log(`- would transcribe [${v.type}] ${v.id}  ${v.title}`);
