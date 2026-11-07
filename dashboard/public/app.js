@@ -587,4 +587,46 @@ async function removeGroup(group) {
   render();
 }
 
+function installedApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function mountInstall() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if (installedApp() || sessionStorage.getItem('ahl-install-hide')) return;
+  const bar = h('div', { class: 'install', hidden: true }, []);
+  const hide = () => {
+    bar.hidden = true;
+    document.body.classList.remove('has-install');
+    sessionStorage.setItem('ahl-install-hide', '1');
+  };
+  const show = (kids) => {
+    bar.hidden = false;
+    document.body.classList.add('has-install');
+    bar.replaceChildren(...kids, h('button', { class: 'btn-ghost', type: 'button', onclick: hide }, ['Not now']));
+  };
+  document.body.append(bar);
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+    show([h('p', {}, ['Add this desk to your Home Screen: tap Share, then Add to Home Screen.'])]);
+    return;
+  }
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    show([
+      h('p', {}, ['Install the desk on this phone.']),
+      h('button', {
+        class: 'btn',
+        type: 'button',
+        onclick: async () => {
+          event.prompt();
+          await event.userChoice;
+          hide();
+        },
+      }, ['Install']),
+    ]);
+  });
+}
+
+mountInstall();
 render();

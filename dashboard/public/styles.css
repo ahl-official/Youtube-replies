@@ -19,7 +19,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: var(--bg); }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; background: var(--bg); }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -39,7 +39,7 @@ a { color: var(--ink); }
 }
 .skip:focus { transform: none; }
 
-.shell { min-height: 100vh; background: var(--bg); }
+.shell { min-height: 100vh; min-height: 100dvh; background: var(--bg); }
 .rail {
   position: sticky;
   top: 0;
@@ -49,7 +49,7 @@ a { color: var(--ink); }
   justify-content: space-between;
   gap: 1rem;
   min-height: 4.5rem;
-  padding: 0.75rem 1.25rem;
+  padding: calc(0.75rem + env(safe-area-inset-top)) 1.25rem 0.75rem;
   background: rgba(6, 6, 6, 0.92);
   border-bottom: 1px solid var(--line);
 }
@@ -88,7 +88,7 @@ a { color: var(--ink); }
 .main {
   width: min(72rem, 100%);
   margin: 0 auto;
-  padding: 2.5rem 1.25rem 2.5rem;
+  padding: 2.5rem 1.25rem calc(2.5rem + env(safe-area-inset-bottom));
   background: transparent;
 }
 .main.is-busy { opacity: 0.72; }
@@ -227,10 +227,35 @@ input::placeholder, textarea::placeholder { color: var(--quiet); }
   .main { padding: 1.75rem 1.5rem 2.5rem; }
   .grid { grid-template-columns: 1.15fr 0.85fr; }
 }
+.install {
+  position: fixed;
+  z-index: 6;
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 1rem;
+}
+.install p { margin: 0; flex: 1 1 12rem; }
+.install[hidden] { display: none; }
+.has-install .main { padding-bottom: calc(8rem + env(safe-area-inset-bottom)); }
+
 @media (max-width: 40rem) {
+  h1 { white-space: normal; }
   .rail { align-items: flex-start; flex-direction: column; }
   .nav { width: 100%; }
   .nav button { flex: 1; }
+  .main { padding-top: 1.25rem; padding-left: 1rem; padding-right: 1rem; }
+  .card header { flex-wrap: wrap; }
+  .search-row { flex-wrap: wrap; }
+  .search-row .btn { width: 100%; }
+  .actions .btn, .actions .btn-ghost, .actions a { flex: 1 1 8rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   .main.is-busy { opacity: 1; }
