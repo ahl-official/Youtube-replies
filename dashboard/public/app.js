@@ -332,21 +332,27 @@ function commentCard(row) {
       row.status === 'discarded' ? h('span') : h('button', {
         class: 'btn danger',
         onclick: async (event) => {
+          const sure = window.confirm('Are you sure? This deletes the comment from the American Hairline channel.');
+          if (!sure) return;
           const button = event.currentTarget;
           button.disabled = true;
+          const previous = button.textContent;
+          button.textContent = 'Deleting…';
           const card = button.closest('.card');
+          setStatus('Deleting the comment on YouTube…', 'loading');
           try {
             await api(`/api/comments/${row.id}/discard`, { method: 'POST' });
             card.remove();
             bumpCounts(row.status);
-            setStatus('Comment discarded.');
+            setStatus('Comment deleted from YouTube.');
             if (!document.querySelector('.card')) {
               const list = document.querySelector('.list');
               if (list && !list.querySelector('.empty')) list.append(h('div', { class: 'empty' }, ['Nothing in this filter.']));
             }
           } catch (err) {
             button.disabled = false;
-            button.textContent = err.message;
+            button.textContent = previous;
+            setStatus(err.message, 'error');
           }
         },
       }, ['Discard']),

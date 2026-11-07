@@ -191,6 +191,146 @@
     },
     {
       "parameters": {
+        "httpMethod": "POST",
+        "path": "ahl-delete-comment",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "n1g",
+      "name": "Delete Comment Hook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        960
+      ],
+      "webhookId": "ahl-delete-comment",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "EBYqE8OYpGo83wMT",
+          "name": "AHL Ingest Webhook Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "mine",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n1h",
+      "name": "Delete Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        960
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst hook = $('Delete Comment Hook').first().json.body || {};\nif (raw.error) {\n  const message = raw.error.description || raw.error.message || 'Could not check which YouTube channel is connected';\n  return [{ json: { ok: false, blocked: true, error: String(message).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300) } }];\n}\nconst mine = (raw.items || [])[0] || {};\nconst handle = (mine.snippet && (mine.snippet.customUrl || mine.snippet.title)) || 'another channel';\nif (mine.id !== 'UCKNwds5t-KBGMp6VzvfAr6A') {\n  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not American Hairline. Reconnect the YouTube account in n8n and choose American Hairline, then discard again.' } }];\n}\nreturn [{ json: { blocked: false, commentId: hook.commentId } }];"
+      },
+      "id": "n1i",
+      "name": "Delete Channel Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ch2",
+              "leftValue": "={{ $json.blocked }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n1j",
+      "name": "Delete Right Channel?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "https://www.googleapis.com/youtube/v3/comments",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ $json.commentId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n1k",
+      "name": "Delete on YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        880
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nif (item.ok === false) return [{ json: { ok: false, error: item.error || 'YouTube did not delete the comment' } }];\nif (item.error) {\n  const raw = item.error.description || item.error.message || 'YouTube did not delete the comment';\n  const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);\n  if (/not found|commentNotFound/i.test(error)) return [{ json: { ok: true, alreadyGone: true } }];\n  return [{ json: { ok: false, error } }];\n}\nreturn [{ json: { ok: true } }];"
+      },
+      "id": "n1l",
+      "name": "Delete Comment Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        960
+      ]
+    },
+    {
+      "parameters": {
         "assignments": {
           "assignments": [
             {
@@ -709,6 +849,68 @@
         [
           {
             "node": "Post One Reply Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Comment Hook": {
+      "main": [
+        [
+          {
+            "node": "Delete Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Channel": {
+      "main": [
+        [
+          {
+            "node": "Delete Channel Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Channel Check": {
+      "main": [
+        [
+          {
+            "node": "Delete Right Channel?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Right Channel?": {
+      "main": [
+        [
+          {
+            "node": "Delete on YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delete Comment Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete on YouTube": {
+      "main": [
+        [
+          {
+            "node": "Delete Comment Result",
             "type": "main",
             "index": 0
           }

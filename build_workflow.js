@@ -203,6 +203,90 @@ return [{ json: { ok: true, id: item.id } }];`,
   },
   {
     parameters: {
+      httpMethod: 'POST',
+      path: 'ahl-delete-comment',
+      authentication: 'headerAuth',
+      responseMode: 'lastNode',
+      options: {},
+    },
+    id: 'n1g', name: 'Delete Comment Hook', type: 'n8n-nodes-base.webhook', typeVersion: 2,
+    position: [0, 960], webhookId: 'ahl-delete-comment',
+    credentials: { httpHeaderAuth: { id: 'EBYqE8OYpGo83wMT', name: 'AHL Ingest Webhook Key' } },
+  },
+  {
+    parameters: {
+      url: 'https://www.googleapis.com/youtube/v3/channels',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [
+        { name: 'part', value: 'snippet' },
+        { name: 'mine', value: 'true' },
+      ]},
+      options: {},
+    },
+    id: 'n1h', name: 'Delete Channel', type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position: [220, 960], onError: 'continueRegularOutput',
+  },
+  {
+    parameters: {
+      jsCode: `const raw = $input.first().json;
+const hook = $('Delete Comment Hook').first().json.body || {};
+if (raw.error) {
+  const message = raw.error.description || raw.error.message || 'Could not check which YouTube channel is connected';
+  return [{ json: { ok: false, blocked: true, error: String(message).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300) } }];
+}
+const mine = (raw.items || [])[0] || {};
+const handle = (mine.snippet && (mine.snippet.customUrl || mine.snippet.title)) || 'another channel';
+if (mine.id !== '${CHANNEL_ID}') {
+  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not American Hairline. Reconnect the YouTube account in n8n and choose American Hairline, then discard again.' } }];
+}
+return [{ json: { blocked: false, commentId: hook.commentId } }];`,
+    },
+    id: 'n1i', name: 'Delete Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [440, 960],
+  },
+  {
+    parameters: {
+      conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        conditions: [
+          { id: 'ch2', leftValue: '={{ $json.blocked }}', rightValue: false, operator: { type: 'boolean', operation: 'false', singleValue: true } },
+        ],
+        combinator: 'and',
+      },
+      options: {},
+    },
+    id: 'n1j', name: 'Delete Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [660, 960],
+  },
+  {
+    parameters: {
+      method: 'DELETE',
+      url: 'https://www.googleapis.com/youtube/v3/comments',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [{ name: 'id', value: '={{ $json.commentId }}' }] },
+      options: {},
+    },
+    id: 'n1k', name: 'Delete on YouTube', type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position: [880, 880], onError: 'continueRegularOutput',
+  },
+  {
+    parameters: {
+      jsCode: `const item = $input.first().json;
+if (item.ok === false) return [{ json: { ok: false, error: item.error || 'YouTube did not delete the comment' } }];
+if (item.error) {
+  const raw = item.error.description || item.error.message || 'YouTube did not delete the comment';
+  const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);
+  if (/not found|commentNotFound/i.test(error)) return [{ json: { ok: true, alreadyGone: true } }];
+  return [{ json: { ok: false, error } }];
+}
+return [{ json: { ok: true } }];`,
+    },
+    id: 'n1l', name: 'Delete Comment Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1100, 960],
+  },
+  {
+    parameters: {
       assignments: { assignments: [
         { id: 'a1', name: 'channelId', value: CHANNEL_ID, type: 'string' },
         { id: 'a2', name: 'minConfidence', value: 0.75, type: 'number' },
@@ -402,6 +486,11 @@ const connections = {
   'Channel Check': { main: [[main('Right Channel?')]] },
   'Right Channel?': { main: [[main('Post One Reply')], [main('Post One Reply Result')]] },
   'Post One Reply': { main: [[main('Post One Reply Result')]] },
+  'Delete Comment Hook': { main: [[main('Delete Channel')]] },
+  'Delete Channel': { main: [[main('Delete Channel Check')]] },
+  'Delete Channel Check': { main: [[main('Delete Right Channel?')]] },
+  'Delete Right Channel?': { main: [[main('Delete on YouTube')], [main('Delete Comment Result')]] },
+  'Delete on YouTube': { main: [[main('Delete Comment Result')]] },
   'Config': { main: [[main('Fetch Channel Comments')]] },
   'Fetch Channel Comments': { main: [[main('Filter New Comments')]] },
   'Filter New Comments': { main: [[main('Video Chunks')]] },

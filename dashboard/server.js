@@ -224,6 +224,35 @@ async function postYouTubeReply(commentId, text) {
   return body.id;
 }
 
+async function deleteYouTubeComment(commentId) {
+  const env = loadEnv();
+  const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
+  const webhookKey = env.N8N_WEBHOOK_KEY;
+  if (!base || !webhookKey) {
+    const err = new Error('N8N_BASE_URL and N8N_WEBHOOK_KEY are missing from the environment');
+    err.status = 400;
+    throw err;
+  }
+  const header = env.N8N_WEBHOOK_HEADER || 'x-api-key';
+  const response = await fetch(`${base}/webhook/ahl-delete-comment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', [header]: webhookKey },
+    body: JSON.stringify({ commentId }),
+  });
+  const raw = await response.text();
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+  const payload = Array.isArray(data) ? data[0] : data;
+  const body = payload && payload.json ? payload.json : payload;
+  if (!response.ok || !body || body.ok !== true) {
+    const rawMessage = body && (body.error || body.message);
+    const message = typeof rawMessage === 'string' ? rawMessage : 'YouTube did not delete the comment';
+    const err = new Error(message.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300));
+    err.status = 502;
+    throw err;
+  }
+}
+
 async function ingest(payload) {
   const env = loadEnv();
   const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
@@ -492,12 +521,18 @@ async function handleApi(req, res, url) {
 
   const discardMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/discard$/);
   if (req.method === 'POST' && discardMatch) {
-    const rows = await sb(`/comment_log?id=eq.${discardMatch[1]}`, {
+    const rows = await sb(`/comment_log?id=eq.${discardMatch[1]}&select=id,comment_id,status`);
+    const row = rows && rows[0];
+    if (!row) return send(res, 404, { error: 'That comment is no longer in the log' });
+    if (row.status === 'discarded') return send(res, 400, { error: 'This comment is already discarded' });
+    if (!row.comment_id) return send(res, 400, { error: 'This comment has no YouTube id' });
+    await deleteYouTubeComment(row.comment_id);
+    const updated = await sb(`/comment_log?id=eq.${row.id}`, {
       method: 'PATCH',
       headers: { Prefer: 'return=representation' },
-      body: JSON.stringify({ status: 'discarded', handled: true }),
+      body: JSON.stringify({ status: 'discarded', handled: true, error_message: '' }),
     });
-    return send(res, 200, { row: rows && rows[0] });
+    return send(res, 200, { row: updated && updated[0] });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/knowledge/uploads') {
