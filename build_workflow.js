@@ -123,6 +123,51 @@ const nodes = [
   },
   {
     parameters: {
+      url: 'https://www.googleapis.com/youtube/v3/channels',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [
+        { name: 'part', value: 'snippet' },
+        { name: 'mine', value: 'true' },
+      ]},
+      options: {},
+    },
+    id: 'n1d', name: 'Posting Channel', type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position: [220, 720], onError: 'continueRegularOutput',
+  },
+  {
+    parameters: {
+      jsCode: `const raw = $input.first().json;
+const hook = $('Post One Reply Hook').first().json.body || {};
+if (raw.error) {
+  const message = raw.error.description || raw.error.message || 'Could not check which YouTube channel is connected';
+  return [{ json: { ok: false, blocked: true, error: String(message).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300) } }];
+}
+const mine = (raw.items || [])[0] || {};
+const handle = (mine.snippet && (mine.snippet.customUrl || mine.snippet.title)) || 'another channel';
+if (mine.id !== '${CHANNEL_ID}') {
+  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not American Hairline. Reconnect the YouTube account in n8n and choose American Hairline, then post again.' } }];
+}
+return [{ json: { blocked: false, commentId: hook.commentId, text: hook.text } }];`,
+    },
+    id: 'n1e', name: 'Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [440, 720],
+  },
+  {
+    parameters: {
+      conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        conditions: [
+          { id: 'ch1', leftValue: '={{ $json.blocked }}', rightValue: false, operator: { type: 'boolean', operation: 'false', singleValue: true } },
+        ],
+        combinator: 'and',
+      },
+      options: {},
+    },
+    id: 'n1f', name: 'Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [660, 720],
+  },
+  {
+    parameters: {
       method: 'POST',
       url: 'https://www.googleapis.com/youtube/v3/comments',
       authentication: 'predefinedCredentialType',
@@ -131,24 +176,30 @@ const nodes = [
       queryParameters: { parameters: [{ name: 'part', value: 'snippet' }] },
       sendBody: true,
       specifyBody: 'json',
-      jsonBody: '={{ JSON.stringify({ snippet: { parentId: $json.body.commentId, textOriginal: $json.body.text } }) }}',
+      jsonBody: '={{ JSON.stringify({ snippet: { parentId: $json.commentId, textOriginal: $json.text } }) }}',
       options: {},
     },
     id: 'n12b', name: 'Post One Reply', type: 'n8n-nodes-base.httpRequest',
-    typeVersion: 4.2, position: [280, 720], onError: 'continueRegularOutput',
+    typeVersion: 4.2, position: [880, 640], onError: 'continueRegularOutput',
   },
   {
     parameters: {
       jsCode: `const item = $input.first().json;
+if (item.ok === false) return [{ json: { ok: false, error: item.error || 'YouTube did not accept the reply' } }];
 if (item.error) {
   const raw = item.error.description || item.error.message || 'YouTube did not accept the reply';
   const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);
   return [{ json: { ok: false, error } }];
 }
+const author = item.snippet && item.snippet.authorChannelId && item.snippet.authorChannelId.value;
+if (author && author !== '${CHANNEL_ID}') {
+  const name = (item.snippet && item.snippet.authorDisplayName) || 'another channel';
+  return [{ json: { ok: false, error: 'YouTube saved that reply as ' + name + ', not American Hairline, so it will not show on the video.' } }];
+}
 if (!item.id) return [{ json: { ok: false, error: 'YouTube did not return a reply id' } }];
 return [{ json: { ok: true, id: item.id } }];`,
     },
-    id: 'n12c', name: 'Post One Reply Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [560, 720],
+    id: 'n12c', name: 'Post One Reply Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1100, 720],
   },
   {
     parameters: {
@@ -346,7 +397,10 @@ const main = (node) => ({ node, type: 'main', index: 0 });
 const connections = {
   'Every 5 Minutes': { main: [[main('Config')]] },
   'Review Comments': { main: [[main('Config')]] },
-  'Post One Reply Hook': { main: [[main('Post One Reply')]] },
+  'Post One Reply Hook': { main: [[main('Posting Channel')]] },
+  'Posting Channel': { main: [[main('Channel Check')]] },
+  'Channel Check': { main: [[main('Right Channel?')]] },
+  'Right Channel?': { main: [[main('Post One Reply')], [main('Post One Reply Result')]] },
   'Post One Reply': { main: [[main('Post One Reply Result')]] },
   'Config': { main: [[main('Fetch Channel Comments')]] },
   'Fetch Channel Comments': { main: [[main('Filter New Comments')]] },
