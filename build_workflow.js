@@ -59,7 +59,7 @@ return $input.all().map((item, i) => {
   let action = 'human';                                   // default: a person looks at it
   if (data.category === 'spam') action = 'ignore';
   else if (data.should_reply === true && reply && Number(data.confidence) >= cfg.minConfidence) action = 'reply';
-  // every posted reply ends with the fixed form message
+  // every posted reply ends with the fixed closing line
   const finalReply = action === 'reply' ? reply + '\\n\\n' + cfg.footer : '';
   return { json: { ...sources[i].json, ...data, action, reply: finalReply } };
 });`;
@@ -68,7 +68,7 @@ const systemPrompt = `You are the community manager for the YouTube channel "Ame
 
 You answer viewer comments using ONLY the information returned by the knowledge_base tool (transcripts of our videos and approved documents). Always call the tool before answering a question.
 
-Our goal is to reply to as many comments as we safely can. A fixed closing line ("fill the form linked in the description or channel bio") is added automatically after your reply, so NEVER write that yourself and never mention forms or links to the description.
+Our goal is to reply to as many comments as we safely can. A fixed closing line with our phone number is added automatically after your reply, so NEVER write that yourself, never include a phone number, and never mention forms or links to the description.
 
 Rules:
 - If the knowledge base does not clearly answer a real question, set should_reply false and category "unknown". A human will handle it. Never guess.
@@ -292,7 +292,7 @@ return [{ json: { ok: true } }];`,
         { id: 'a2', name: 'minConfidence', value: 0.75, type: 'number' },
         { id: 'a3', name: 'maxPerRun', value: 10, type: 'number' },
         { id: 'a5', name: 'maxAgeHours', value: 48, type: 'number' },
-        { id: 'a4', name: 'footer', value: 'For more details, please fill the form linked in the video description or our channel bio.', type: 'string' },
+        { id: 'a4', name: 'footer', value: 'If you have any questions or would like to know more, please feel free to connect with us at +91 92226 66111. We’ll be happy to help!', type: 'string' },
       ]},
       options: {},
     },
