@@ -8,6 +8,9 @@
   --line: rgba(255, 255, 255, 0.15);
   --line-strong: rgba(255, 255, 255, 0.3);
   --red: #ff381e;
+  --accent: #ff381e;
+  --accent-ink: #1a0503;
+  --rail: rgba(6, 6, 6, 0.92);
   --good: #b7f0cf;
   --hit: 2.75rem;
   --radius: 1.25rem;
@@ -18,7 +21,17 @@
   background: var(--bg);
 }
 
-* { box-sizing: border-box; }
+body[data-channel="alchemane"] {
+  --bg: #071614;
+  --card: #0d2422;
+  --panel: #12302d;
+  --line: rgba(67, 178, 164, 0.28);
+  --line-strong: rgba(67, 178, 164, 0.55);
+  --accent: #43b2a4;
+  --accent-ink: #041614;
+  --rail: rgba(7, 22, 20, 0.94);
+  --good: #d7fff4;
+}
 body { margin: 0; min-height: 100vh; min-height: 100dvh; background: var(--bg); }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -50,8 +63,8 @@ a { color: var(--ink); }
   gap: 1rem;
   min-height: 4.5rem;
   padding: calc(0.75rem + env(safe-area-inset-top)) 1.25rem 0.75rem;
-  background: rgba(6, 6, 6, 0.92);
-  border-bottom: 1px solid var(--line);
+  background: var(--rail);
+  border-bottom: 0.2rem solid var(--accent);
 }
 .brand-switch {
   display: flex;
@@ -77,7 +90,7 @@ a { color: var(--ink); }
   line-height: 1;
   text-transform: uppercase;
 }
-.brand-switch button.active { background: #fff; color: #000; }
+.brand-switch button.active { background: var(--accent); color: var(--accent-ink); }
 .nav {
   display: flex;
   flex-direction: row;
@@ -98,7 +111,7 @@ a { color: var(--ink); }
   text-align: center;
 }
 .nav button small { display: none; }
-.nav button.active { background: #fff; color: #000; }
+.nav button.active { background: var(--accent); color: var(--accent-ink); }
 .nav button:focus-visible { outline-color: var(--red); }
 
 .main {
@@ -113,7 +126,7 @@ a { color: var(--ink); }
   align-items: center;
   margin: 0;
   padding: 0.35rem 0.85rem;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--accent);
   border-radius: 999px;
   color: #fff;
   letter-spacing: 0.16em;
@@ -182,7 +195,7 @@ h2 {
   padding: 0.45rem 0.95rem;
   text-decoration: none;
 }
-.chip.active, .btn { background: #fff; color: #000; border-color: #fff; }
+.chip.active, .btn { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn-ghost { background: transparent; color: #fff; }
 .btn.danger { background: transparent; color: var(--red); border-color: var(--red); }
 .pill {

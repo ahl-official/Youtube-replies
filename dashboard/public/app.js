@@ -61,16 +61,21 @@ function selectChannel(key) {
   state.notice = '';
   state.noticeKind = '';
   localStorage.setItem('desk-channel', key);
+  paintChannel();
   render();
 }
 
 function paintChannel() {
+  document.body.dataset.channel = state.channel;
+  const theme = document.querySelector('meta[name="theme-color"]');
+  if (theme) theme.setAttribute('content', state.channel === 'alchemane' ? '#071614' : '#060606');
   for (const button of document.querySelectorAll('[data-channel]')) {
     const on = button.dataset.channel === state.channel;
     button.className = on ? 'active' : '';
     button.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
 }
+paintChannel();
 function ensureShell() {
   if (app.querySelector('.shell')) return;
   app.replaceChildren(h('div', { class: 'shell' }, [
