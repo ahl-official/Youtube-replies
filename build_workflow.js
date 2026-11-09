@@ -4,7 +4,27 @@
 const fs = require('fs');
 const path = require('path');
 
-const CHANNEL_ID = 'UCKNwds5t-KBGMp6VzvfAr6A'; // @AmericanHairline
+const AHL_ID = 'UCKNwds5t-KBGMp6VzvfAr6A';
+const ALC_ID = 'UC-4qTtMQtEYL7xwjpgxfwBg';
+const CHANNEL_ID = AHL_ID; // default when a review is started without a channel
+const CHANNEL_NAMES = JSON.stringify({
+  [AHL_ID]: 'American Hairline',
+  [ALC_ID]: 'Alchemane',
+});
+const CHANNEL_TOPICS = JSON.stringify({
+  [AHL_ID]: 'hair patches, hair systems and wigs',
+  [ALC_ID]: "women's hair extensions and wigs",
+});
+
+const activeChannelCode = `let channelId = '${AHL_ID}';
+try {
+  const body = $('Review Comments').first().json.body || {};
+  if (body.channelId) channelId = String(body.channelId);
+} catch (e) {}
+const names = ${CHANNEL_NAMES};
+const topics = ${CHANNEL_TOPICS};
+if (!names[channelId]) channelId = '${AHL_ID}';
+return [{ json: { channelId, channelName: names[channelId], topic: topics[channelId] } }];`;
 
 const filterCode = `// Keep only fresh, unanswered, top-level comments from other people.
 // A comment stays eligible for 48 hours, so a miss on the 5-minute poll can still be picked up.
@@ -64,9 +84,7 @@ return $input.all().map((item, i) => {
   return { json: { ...sources[i].json, ...data, action, reply: finalReply } };
 });`;
 
-const systemPrompt = `You are the community manager for the YouTube channel "American Hairline", which posts educational content about hair patches, hair systems and wigs.
-
-You answer viewer comments using ONLY the information returned by the knowledge_base tool (transcripts of our videos and approved documents). Always call the tool before answering a question.
+const systemPrompt = `You answer viewer comments using ONLY the information returned by the knowledge_base tool (transcripts of our videos and approved documents). Always call the tool before answering a question.
 
 Our goal is to reply to as many comments as we safely can. A fixed closing line with our phone number is added automatically after your reply, so NEVER write that yourself, never include a phone number, and never mention forms or links to the description.
 
@@ -78,7 +96,7 @@ Rules:
 - Complaints, refund or legal threats, abuse or angry comments: should_reply false and category "complaint" (a human handles these).
 - Spam, scams, promotions or gibberish: should_reply false and category "spam".
 - You are given the title and opening of the video the comment is posted on. Read the comment as a reaction to THAT video.
-- Praise means the viewer is thanking or complimenting this channel, the host, or their own result. A joke or opinion about a person shown in the video is not praise. On a video about an actor wearing a hair patch, "it's his profession, he has to look good on screen" is teasing that actor, not saying our customers feel confident. Never reply as if the commenter is a happy client unless they clearly are.
+- Praise means the viewer is thanking or complimenting this channel, the host, or their own result. A joke or opinion about a person shown in the video is not praise. On a video about an actor wearing a hair patch or extensions, "it's his profession, he has to look good on screen" is teasing that actor, not saying our customers feel confident. Never reply as if the commenter is a happy client unless they clearly are.
 - For a joke or reaction about the person in the video, reply in that same light tone, in the commenter's language, about that person. Do not invent a customer story. If the video context does not make the joke clear, set should_reply false and category "other".
 - Praise and thanks aimed at this channel: a short, warm one-line reply is fine (confidence 0.9).
 - Video or topic requests (e.g. "please make a video on X"): set should_reply true, category "video_request", confidence 0.9. Reply with a short thank-you saying we have noted the suggestion, in the commenter's language. Do not promise a date or that the video will be made, and do not answer the topic from memory.
@@ -86,9 +104,12 @@ Rules:
 - Reply in the SAME language and script as the comment. A Hinglish comment (Hindi written in English letters) gets a Hinglish reply, not English. Keep it friendly, under 60 words, no hashtags, at most one emoji.
 - For praise, vary the wording each time; never reuse the same sentence.
 - When the answer comes from a specific video, mention it naturally (e.g. "we cover this in our video on X").
+- Answer only for the channel named above. Ignore knowledge about the other brand.
 
 Respond with ONLY a JSON object. No explanation, no reasoning and no markdown before or after it:
 {"should_reply": true|false, "reply": "text", "confidence": 0.0-1.0, "category": "question|praise|video_request|pricing|complaint|spam|unknown|other", "reason": "short"}`;
+
+const systemMessage = `={{ 'You are the community manager for the YouTube channel "' + $('Config').first().json.channelName + '", which posts educational content about ' + $('Config').first().json.topic + '.\\n\\n' + ${JSON.stringify(systemPrompt)} }}`;
 
 const nodes = [
   {
@@ -108,6 +129,10 @@ const nodes = [
     id: 'n1b', name: 'Review Comments', type: 'n8n-nodes-base.webhook', typeVersion: 2,
     position: [0, 480], webhookId: 'ahl-reply-run',
     credentials: { httpHeaderAuth: { id: 'EBYqE8OYpGo83wMT', name: 'AHL Ingest Webhook Key' } },
+  },
+  {
+    parameters: { jsCode: activeChannelCode },
+    id: 'n1a', name: 'Active Channel', type: 'n8n-nodes-base.code', typeVersion: 2, position: [220, 160],
   },
   {
     parameters: {
@@ -145,9 +170,12 @@ if (raw.error) {
   return [{ json: { ok: false, blocked: true, error: String(message).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300) } }];
 }
 const mine = (raw.items || [])[0] || {};
+const names = ${CHANNEL_NAMES};
 const handle = (mine.snippet && (mine.snippet.customUrl || mine.snippet.title)) || 'another channel';
-if (mine.id !== '${CHANNEL_ID}') {
-  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not American Hairline. Reconnect the YouTube account in n8n and choose American Hairline, then post again.' } }];
+const expected = hook.channelId || '${AHL_ID}';
+const expectedName = names[expected] || 'the selected channel';
+if (mine.id !== expected) {
+  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not ' + expectedName + '. Connect that YouTube channel in n8n, then try again.' } }];
 }
 return [{ json: { blocked: false, commentId: hook.commentId, text: hook.text } }];`,
     },
@@ -192,9 +220,11 @@ if (item.error) {
   return [{ json: { ok: false, error } }];
 }
 const author = item.snippet && item.snippet.authorChannelId && item.snippet.authorChannelId.value;
-if (author && author !== '${CHANNEL_ID}') {
+const expected = $('Post One Reply Hook').first().json.body.channelId || '${AHL_ID}';
+const names = ${CHANNEL_NAMES};
+if (author && author !== expected) {
   const name = (item.snippet && item.snippet.authorDisplayName) || 'another channel';
-  return [{ json: { ok: false, error: 'YouTube saved that reply as ' + name + ', not American Hairline, so it will not show on the video.' } }];
+  return [{ json: { ok: false, error: 'YouTube saved that reply as ' + name + ', not ' + (names[expected] || 'the selected channel') + ', so it will not show on the video.' } }];
 }
 if (!item.id) return [{ json: { ok: false, error: 'YouTube did not return a reply id' } }];
 return [{ json: { ok: true, id: item.id } }];`,
@@ -237,9 +267,12 @@ if (raw.error) {
   return [{ json: { ok: false, blocked: true, error: String(message).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300) } }];
 }
 const mine = (raw.items || [])[0] || {};
+const names = ${CHANNEL_NAMES};
 const handle = (mine.snippet && (mine.snippet.customUrl || mine.snippet.title)) || 'another channel';
-if (mine.id !== '${CHANNEL_ID}') {
-  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not American Hairline. Reconnect the YouTube account in n8n and choose American Hairline, then discard again.' } }];
+const expected = hook.channelId || '${AHL_ID}';
+const expectedName = names[expected] || 'the selected channel';
+if (mine.id !== expected) {
+  return [{ json: { ok: false, blocked: true, error: 'YouTube is connected as ' + handle + ', not ' + expectedName + '. Connect that YouTube channel in n8n, then discard again.' } }];
 }
 return [{ json: { blocked: false, commentId: hook.commentId } }];`,
     },
@@ -260,13 +293,16 @@ return [{ json: { blocked: false, commentId: hook.commentId } }];`,
   },
   {
     parameters: {
-      method: 'DELETE',
-      url: 'https://www.googleapis.com/youtube/v3/comments',
+      method: 'POST',
+      url: 'https://www.googleapis.com/youtube/v3/comments/setModerationStatus',
       authentication: 'predefinedCredentialType',
       nodeCredentialType: 'youTubeOAuth2Api',
       sendQuery: true,
-      queryParameters: { parameters: [{ name: 'id', value: '={{ $json.commentId }}' }] },
-      options: {},
+      queryParameters: { parameters: [
+        { name: 'id', value: '={{ $json.commentId }}' },
+        { name: 'moderationStatus', value: 'rejected' },
+      ]},
+      options: { response: { response: { responseFormat: 'text' } } },
     },
     id: 'n1k', name: 'Delete on YouTube', type: 'n8n-nodes-base.httpRequest',
     typeVersion: 4.2, position: [880, 880], onError: 'continueRegularOutput',
@@ -278,7 +314,7 @@ if (item.ok === false) return [{ json: { ok: false, error: item.error || 'YouTub
 if (item.error) {
   const raw = item.error.description || item.error.message || 'YouTube did not delete the comment';
   const error = String(raw).replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);
-  if (/not found|commentNotFound/i.test(error)) return [{ json: { ok: true, alreadyGone: true } }];
+  if (/not found|commentNotFound|already been deleted|Invalid JSON in response body/i.test(error)) return [{ json: { ok: true, alreadyGone: true } }];
   return [{ json: { ok: false, error } }];
 }
 return [{ json: { ok: true } }];`,
@@ -288,7 +324,9 @@ return [{ json: { ok: true } }];`,
   {
     parameters: {
       assignments: { assignments: [
-        { id: 'a1', name: 'channelId', value: CHANNEL_ID, type: 'string' },
+        { id: 'a1', name: 'channelId', value: '={{ $json.channelId }}', type: 'string' },
+        { id: 'a6', name: 'channelName', value: '={{ $json.channelName }}', type: 'string' },
+        { id: 'a7', name: 'topic', value: '={{ $json.topic }}', type: 'string' },
         { id: 'a2', name: 'minConfidence', value: 0.75, type: 'number' },
         { id: 'a3', name: 'maxPerRun', value: 10, type: 'number' },
         { id: 'a5', name: 'maxAgeHours', value: 48, type: 'number' },
@@ -375,7 +413,7 @@ return comments.map((comment) => {
     parameters: {
       promptType: 'define',
       text: '=Video: {{ $json.videoTitle }}\nVideo ID: {{ $json.videoId }}\nWhat this video covers: {{ $json.videoContext }}\nViewer: {{ $json.author }}\nComment: {{ $json.comment }}',
-      options: { systemMessage: systemPrompt },
+      options: { systemMessage },
     },
     id: 'n5', name: 'Answer From Knowledge Base', type: '@n8n/n8n-nodes-langchain.agent',
     typeVersion: 1.7, position: [1320, 300],
@@ -389,7 +427,7 @@ return comments.map((comment) => {
     parameters: {
       mode: 'retrieve-as-tool',
       toolName: 'knowledge_base',
-      toolDescription: 'Search American Hairline video transcripts and approved documents about hair patches, hair systems, wigs, maintenance, application and FAQs. Input: the viewer question in plain words.',
+      toolDescription: 'Search this channel’s video transcripts and approved documents. Input: the viewer question in plain words. Ignore results about the other brand.',
       tableName: 'documents',
       topK: 5,
       includeDocumentMetadata: true,
@@ -479,8 +517,9 @@ return comments.map((comment) => {
 
 const main = (node) => ({ node, type: 'main', index: 0 });
 const connections = {
-  'Every 5 Minutes': { main: [[main('Config')]] },
-  'Review Comments': { main: [[main('Config')]] },
+  'Every 5 Minutes': { main: [[main('Active Channel')]] },
+  'Review Comments': { main: [[main('Active Channel')]] },
+  'Active Channel': { main: [[main('Config')]] },
   'Post One Reply Hook': { main: [[main('Posting Channel')]] },
   'Posting Channel': { main: [[main('Channel Check')]] },
   'Channel Check': { main: [[main('Right Channel?')]] },

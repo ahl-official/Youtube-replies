@@ -57,6 +57,10 @@
               {
                 "name": "language",
                 "value": "={{ $json.language }}"
+              },
+              {
+                "name": "channel",
+                "value": "={{ $json.channel }}"
               }
             ]
           }
@@ -120,7 +124,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// External knowledge: POST {title, text, source?} -> chunks of ~350 words\n// Or pre-chunked AssemblyAI transcripts: {title, videoId, type, transcript, language, chunks:[{text,start,url}]}\nconst body = $json.body || $json;\nif (Array.isArray(body.chunks)) {\n  return body.chunks.filter((c) => c && c.text).map((c) => ({ json: {\n    text: String(c.text),\n    source: 'youtube',\n    videoId: body.videoId || '',\n    type: body.type || 'video',\n    title: body.title || 'Video',\n    start: c.start || 0,\n    url: c.url || '',\n    transcript: body.transcript || 'universal-2',\n    language: body.language || '',\n  }}));\n}\nconst title = body.title || 'External document';\nconst source = body.source || 'external';\nconst text = String(body.text || '').replace(/\\s+/g, ' ').trim();\nif (!text) throw new Error('Body needs a \"text\" field');\nconst w = text.split(' ');\nconst out = [];\nfor (let i = 0; i < w.length; i += 350) {\n  out.push({ json: {\n    text: w.slice(i, i + 350).join(' '),\n    source: 'external',\n    type: 'document',\n    videoId: '',\n    title,\n    start: 0,\n    url: /^https?:/.test(source) ? source : '',\n    transcript: '',\n    language: '',\n  }});\n}\nreturn out;"
+        "jsCode": "// External knowledge: POST {title, text, source?} -> chunks of ~350 words\n// Or pre-chunked AssemblyAI transcripts: {title, videoId, type, transcript, language, chunks:[{text,start,url}]}\nconst body = $json.body || $json;\nif (Array.isArray(body.chunks)) {\n  return body.chunks.filter((c) => c && c.text).map((c) => ({ json: {\n    text: String(c.text),\n    source: 'youtube',\n    videoId: body.videoId || '',\n    type: body.type || 'video',\n    title: body.title || 'Video',\n    start: c.start || 0,\n    url: c.url || '',\n    transcript: body.transcript || 'universal-2',\n    language: body.language || '',\n    channel: body.channel || 'ahl',\n  }}));\n}\nconst title = body.title || 'External document';\nconst source = body.source || 'external';\nconst text = String(body.text || '').replace(/\\s+/g, ' ').trim();\nif (!text) throw new Error('Body needs a \"text\" field');\nconst w = text.split(' ');\nconst out = [];\nfor (let i = 0; i < w.length; i += 350) {\n  out.push({ json: {\n    text: w.slice(i, i + 350).join(' '),\n    source: 'external',\n    type: 'document',\n    videoId: '',\n    title,\n    start: 0,\n    url: /^https?:/.test(source) ? source : '',\n    transcript: '',\n    language: '',\n    channel: body.channel || 'ahl',\n  }});\n}\nreturn out;"
       },
       "id": "w2",
       "name": "Chunk External Text",

@@ -104,6 +104,7 @@ if (Array.isArray(body.chunks)) {
     url: c.url || '',
     transcript: body.transcript || 'universal-2',
     language: body.language || '',
+    channel: body.channel || 'ahl',
   }}));
 }
 const title = body.title || 'External document';
@@ -123,6 +124,7 @@ for (let i = 0; i < w.length; i += 350) {
     url: /^https?:/.test(source) ? source : '',
     transcript: '',
     language: '',
+    channel: body.channel || 'ahl',
   }});
 }
 return out;`;
@@ -231,6 +233,7 @@ const nodes = [
         { name: 'url', value: '={{ $json.url }}' },
         { name: 'transcript', value: '={{ $json.transcript }}' },
         { name: 'language', value: '={{ $json.language }}' },
+        { name: 'channel', value: '={{ $json.channel }}' },
       ]}},
     },
     id: 'i13', name: 'Document Loader', type: '@n8n/n8n-nodes-langchain.documentDefaultDataLoader', typeVersion: 1.1, position: [2120, 440],

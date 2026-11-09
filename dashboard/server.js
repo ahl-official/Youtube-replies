@@ -4,6 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const channel = require('./channel');
+const channels = require('./channels');
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
@@ -105,11 +106,12 @@ async function knownVideoIds() {
   return ids;
 }
 
-function channelDeps() {
+function channelDeps(youtubeChannelId) {
   const { env, url, key } = supabaseConfig();
   const headers = { apikey: key, Authorization: `Bearer ${key}` };
   return {
     env: () => env,
+    channelId: youtubeChannelId,
     knownIds: knownVideoIds,
     ingest,
     async storageGet(name) {
@@ -194,7 +196,7 @@ function findGroup(rows, key) {
   return groupRows(rows).find((group) => group.key === key) || null;
 }
 
-async function postYouTubeReply(commentId, text) {
+async function postYouTubeReply(commentId, text, channelId) {
   const env = loadEnv();
   const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
   const webhookKey = env.N8N_WEBHOOK_KEY;
@@ -207,7 +209,7 @@ async function postYouTubeReply(commentId, text) {
   const response = await fetch(`${base}/webhook/ahl-post-reply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', [header]: webhookKey },
-    body: JSON.stringify({ commentId, text }),
+    body: JSON.stringify({ commentId, text, channelId }),
   });
   const raw = await response.text();
   let data = null;
@@ -224,7 +226,7 @@ async function postYouTubeReply(commentId, text) {
   return body.id;
 }
 
-async function deleteYouTubeComment(commentId) {
+async function deleteYouTubeComment(commentId, channelId) {
   const env = loadEnv();
   const base = (env.N8N_BASE_URL || '').replace(/\/+$/, '');
   const webhookKey = env.N8N_WEBHOOK_KEY;
@@ -237,7 +239,7 @@ async function deleteYouTubeComment(commentId) {
   const response = await fetch(`${base}/webhook/ahl-delete-comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', [header]: webhookKey },
-    body: JSON.stringify({ commentId }),
+    body: JSON.stringify({ commentId, channelId }),
   });
   const raw = await response.text();
   let data = null;
@@ -376,7 +378,97 @@ async function n8n(pathname, options = {}) {
   return body;
 }
 
-async function startReplyRun() {
+const videoChannels = new Map();
+let videoChannelsLoaded = false;
+
+async function loadVideoChannels() {
+  if (videoChannelsLoaded) return;
+  videoChannelsLoaded = true;
+  try {
+    const text = await channelDeps(channels.byKey('ahl').channelId).storageGet('video-channels.json');
+    const data = text ? JSON.parse(text) : {};
+    for (const [videoId, channelId] of Object.entries(data)) {
+      if (videoId && channelId) videoChannels.set(videoId, channelId);
+    }
+  } catch {
+    videoChannelsLoaded = false;
+  }
+}
+
+async function saveVideoChannels() {
+  const body = JSON.stringify(Object.fromEntries(videoChannels));
+  await channelDeps(channels.byKey('ahl').channelId).storagePut('video-channels.json', body);
+}
+
+async function channelIdForVideo(videoId) {
+  if (!videoId) return '';
+  await loadVideoChannels();
+  if (videoChannels.has(videoId)) return videoChannels.get(videoId);
+  const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      videoId,
+      context: { client: { clientName: 'WEB', clientVersion: '2.20251101.00.00', hl: 'en', gl: 'US' } },
+    }),
+  });
+  if (!response.ok) return '';
+  const data = await response.json().catch(() => ({}));
+  const channelId = data && data.videoDetails && data.videoDetails.channelId;
+  if (!channelId) return '';
+  videoChannels.set(videoId, channelId);
+  await saveVideoChannels().catch(() => {});
+  return channelId;
+}
+
+async function resolveVideos(ids) {
+  const missing = [...new Set(ids.filter(Boolean))].filter((id) => !videoChannels.has(id));
+  await loadVideoChannels();
+  const pending = missing.filter((id) => !videoChannels.has(id));
+  for (let i = 0; i < pending.length; i += 4) {
+    await Promise.all(pending.slice(i, i + 4).map((id) => channelIdForVideo(id).catch(() => '')));
+  }
+}
+
+function deskChannel(value) {
+  return channels.byKey(value);
+}
+
+async function commentPage() {
+  const rows = [];
+  for (let from = 0; from < 5000; from += 1000) {
+    const page = await sb('/comment_log?select=id,video_id,author,comment,category,reason,reply,status,error_message,handled,created_at,comment_id,youtube_reply_id&order=created_at.desc', {
+      headers: { Range: `${from}-${from + 999}` },
+    });
+    rows.push(...(page || []));
+    if (!page || page.length < 1000) break;
+  }
+  await resolveVideos(rows.map((row) => row.video_id));
+  return rows;
+}
+
+function rowMatchesChannel(row, channel) {
+  const tagged = row.metadata && (row.metadata.channel === 'ahl' || row.metadata.channel === 'alchemane');
+  if (tagged) return row.metadata.channel === channel.key;
+  const videoId = row.video_id || (row.metadata && row.metadata.videoId) || '';
+  if (!videoId) return channel.key === 'ahl';
+  const found = videoChannels.get(videoId);
+  if (!found) return channel.key === 'ahl';
+  return found === channel.channelId;
+}
+
+function commentSummaryFrom(rows) {
+  const summary = { open: 0 };
+  for (const name of COMMENT_STATUSES) summary[name] = 0;
+  for (const row of rows) {
+    if (summary[row.status] != null) summary[row.status] += 1;
+    if (row.status === 'needs_human' && row.handled === false) summary.open += 1;
+  }
+  summary.all = summary.needs_human + summary.drafted + summary.replied + summary.skipped + summary.error;
+  return summary;
+}
+
+async function startReplyRun(channel) {
   const { env, base } = n8nConfig();
   const header = env.N8N_WEBHOOK_HEADER || 'x-api-key';
   const key = env.N8N_WEBHOOK_KEY;
@@ -392,7 +484,7 @@ async function startReplyRun() {
       const response = await fetch(`${base}/webhook/ahl-reply-run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', [header]: key },
-        body: '{}',
+        body: JSON.stringify({ channelId: channel.channelId }),
       });
       if (response.ok) return { startedAt };
       lastError = new Error(`Review webhook returned ${response.status}`);
@@ -411,7 +503,7 @@ function reviewedCount(execution) {
   return Array.isArray(items) ? items.length : 0;
 }
 
-async function replyRunStatus(startedAt) {
+async function replyRunStatus(startedAt, channel) {
   if (!startedAt) {
     const err = new Error('Missing start time');
     err.status = 400;
@@ -421,15 +513,12 @@ async function replyRunStatus(startedAt) {
   const row = (list.data || []).find((item) => item.startedAt && item.startedAt >= startedAt);
   if (!row || ['running', 'waiting', 'new'].includes(row.status)) return { done: false };
   const full = await n8n(`/api/v1/executions/${row.id}?includeData=true`);
-  return { done: true, status: row.status, reviewed: reviewedCount(full), summary: await commentSummary() };
+  return { done: true, status: row.status, reviewed: reviewedCount(full), summary: await commentSummary(channel) };
 }
 
-async function commentSummary() {
-  const counts = await Promise.all(COMMENT_STATUSES.map((name) => sbCount(`/comment_log?select=id&status=eq.${name}`)));
-  const summary = { open: await sbCount('/comment_log?select=id&status=eq.needs_human&handled=eq.false') };
-  COMMENT_STATUSES.forEach((name, index) => { summary[name] = counts[index]; });
-  summary.all = summary.needs_human + summary.drafted + summary.replied + summary.skipped + summary.error;
-  return summary;
+async function commentSummary(channel) {
+  const rows = (await commentPage()).filter((row) => rowMatchesChannel(row, channel || channels.byKey('ahl')));
+  return commentSummaryFrom(rows);
 }
 
 async function handleApi(req, res, url) {
@@ -462,23 +551,26 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/reply/run') {
-    return send(res, 200, await startReplyRun());
+    const body = await readBody(req);
+    return send(res, 200, await startReplyRun(deskChannel(body.channel)));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/reply/status') {
-    return send(res, 200, await replyRunStatus(url.searchParams.get('since')));
+    return send(res, 200, await replyRunStatus(url.searchParams.get('since'), deskChannel(url.searchParams.get('channel'))));
   }
 
   if (req.method === 'GET' && url.pathname === '/api/comments') {
+    const selected = deskChannel(url.searchParams.get('channel'));
     const allowed = new Set([...COMMENT_STATUSES, 'all']);
     const statusFilter = allowed.has(url.searchParams.get('status')) ? url.searchParams.get('status') : 'needs_human';
     const handled = url.searchParams.get('handled');
-    let query = '/comment_log?select=id,video_id,author,comment,category,reason,reply,status,error_message,handled,created_at&order=created_at.desc&limit=200';
-    if (statusFilter === 'all') query += '&status=neq.discarded';
-    else query += `&status=eq.${statusFilter}`;
-    if (handled === 'false' || handled === 'true') query += `&handled=eq.${handled}`;
-    const [rows, summary] = await Promise.all([sb(query), commentSummary()]);
-    return send(res, 200, { rows, summary });
+    const all = (await commentPage()).filter((row) => rowMatchesChannel(row, selected));
+    let shown = all;
+    if (statusFilter === 'all') shown = shown.filter((row) => row.status !== 'discarded');
+    else shown = shown.filter((row) => row.status === statusFilter);
+    if (handled === 'false' || handled === 'true') shown = shown.filter((row) => String(row.handled) === handled);
+    const rows = shown.slice(0, 200).map(({ comment_id, youtube_reply_id, ...row }) => row);
+    return send(res, 200, { rows, summary: commentSummaryFrom(all), channel: selected });
   }
 
   const handledMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/handled$/);
@@ -508,7 +600,7 @@ async function handleApi(req, res, url) {
 
   const postMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/post$/);
   if (req.method === 'POST' && postMatch) {
-    const rows = await sb(`/comment_log?id=eq.${postMatch[1]}&select=id,comment_id,reply,status,youtube_reply_id`);
+    const rows = await sb(`/comment_log?id=eq.${postMatch[1]}&select=id,comment_id,reply,status,youtube_reply_id,video_id`);
     const row = rows && rows[0];
     if (!row) return send(res, 404, { error: 'That comment is no longer in the log' });
     if (row.status === 'discarded') return send(res, 400, { error: 'Discarded comments are not posted' });
@@ -516,7 +608,9 @@ async function handleApi(req, res, url) {
     const text = String(row.reply || '').trim();
     if (!text) return send(res, 400, { error: 'Write a reply before posting it' });
     if (!row.comment_id) return send(res, 400, { error: 'This comment has no YouTube id' });
-    const youtubeId = await postYouTubeReply(row.comment_id, text);
+    const owner = channels.byId(await channelIdForVideo(row.video_id));
+    if (!owner) return send(res, 502, { error: 'Could not tell which channel this comment is on' });
+    const youtubeId = await postYouTubeReply(row.comment_id, text, owner.channelId);
     const updated = await sb(`/comment_log?id=eq.${row.id}`, {
       method: 'PATCH',
       headers: { Prefer: 'return=representation' },
@@ -527,12 +621,14 @@ async function handleApi(req, res, url) {
 
   const discardMatch = url.pathname.match(/^\/api\/comments\/(\d+)\/discard$/);
   if (req.method === 'POST' && discardMatch) {
-    const rows = await sb(`/comment_log?id=eq.${discardMatch[1]}&select=id,comment_id,status`);
+    const rows = await sb(`/comment_log?id=eq.${discardMatch[1]}&select=id,comment_id,status,video_id`);
     const row = rows && rows[0];
     if (!row) return send(res, 404, { error: 'That comment is no longer in the log' });
     if (row.status === 'discarded') return send(res, 400, { error: 'This comment is already discarded' });
     if (!row.comment_id) return send(res, 400, { error: 'This comment has no YouTube id' });
-    await deleteYouTubeComment(row.comment_id);
+    const owner = channels.byId(await channelIdForVideo(row.video_id));
+    if (!owner) return send(res, 502, { error: 'Could not tell which channel this comment is on' });
+    await deleteYouTubeComment(row.comment_id, owner.channelId);
     const updated = await sb(`/comment_log?id=eq.${row.id}`, {
       method: 'PATCH',
       headers: { Prefer: 'return=representation' },
@@ -542,23 +638,28 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/knowledge/uploads') {
+    const selected = deskChannel(url.searchParams.get('channel'));
     const id = url.searchParams.get('id') || '';
     if (id) {
-      const result = await channel.uploadStatus(channelDeps(), id);
+      const result = await channel.uploadStatus(channelDeps(selected.channelId), id);
       if (result.phase === 'done') invalidateDocs();
       return send(res, 200, result);
     }
-    return send(res, 200, await channel.newUploads(channelDeps()));
+    return send(res, 200, await channel.newUploads(channelDeps(selected.channelId)));
   }
 
   if (req.method === 'POST' && url.pathname === '/api/knowledge/uploads') {
     const body = await readBody(req);
-    const result = await channel.beginUpload(channelDeps(), body);
+    const selected = deskChannel(body.channel);
+    const result = await channel.beginUpload(channelDeps(selected.channelId), body);
     return send(res, 202, result);
   }
 
   if (req.method === 'GET' && url.pathname === '/api/knowledge') {
-    const groups = groupRows(await allDocuments());
+    const selected = deskChannel(url.searchParams.get('channel'));
+    const docs = await allDocuments();
+    await resolveVideos(docs.map((row) => row.metadata && row.metadata.videoId));
+    const groups = groupRows(docs.filter((row) => rowMatchesChannel(row, selected)));
     const key = url.searchParams.get('key');
     if (key) {
       const group = groups.find((item) => item.key === key);
@@ -577,7 +678,8 @@ async function handleApi(req, res, url) {
     const title = String(body.title || '').trim();
     const text = String(body.text || '').trim();
     if (!title || !text) return send(res, 400, { error: 'Title and text are both required' });
-    await ingest({ title, text, source: String(body.source || 'dashboard').trim() || 'dashboard' });
+    const selected = deskChannel(body.channel);
+    await ingest({ title, text, source: String(body.source || 'dashboard').trim() || 'dashboard', channel: selected.key });
     invalidateDocs();
     return send(res, 200, { ok: true });
   }
@@ -598,18 +700,21 @@ async function handleApi(req, res, url) {
     if (!current) return send(res, 404, { error: 'That entry is gone' });
     const previousMaxId = rows.reduce((max, row) => Math.max(max, row.id), 0);
     const oldIds = current.chunks.map((chunk) => chunk.id);
+    const selected = deskChannel(body.channel);
     if (current.videoId) {
+      const owner = channels.byId(await channelIdForVideo(current.videoId)) || selected;
       await ingest({
         title: current.title,
         videoId: current.videoId,
         type: current.type || 'video',
         transcript: current.transcript || 'dashboard',
         language: current.language || '',
+        channel: owner.key,
         chunks,
       });
       await waitForInsert((row) => (row.metadata || {}).videoId === current.videoId, previousMaxId);
     } else {
-      await ingest({ title: current.title, text: chunks.map((chunk) => chunk.text).join('\n\n'), source: 'dashboard' });
+      await ingest({ title: current.title, text: chunks.map((chunk) => chunk.text).join('\n\n'), source: 'dashboard', channel: selected.key });
       await waitForInsert((row) => {
         const metadata = row.metadata || {};
         return !metadata.videoId && metadata.title === current.title;

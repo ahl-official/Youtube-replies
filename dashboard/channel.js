@@ -6,8 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const channels = require('./channels');
 
-const CHANNEL = 'UCKNwds5t-KBGMp6VzvfAr6A';
 const TABS = {
   video: 'EgZ2aWRlb3PyBgQKAjoA',
   short: 'EgZzaG9ydHPyBgUKA5oBAA==',
@@ -17,7 +17,7 @@ const WORDS_PER_CHUNK = 350;
 const STATE_BUCKET = 'desk-state';
 const STATE_PATH = 'ingest.json';
 const AAI = 'https://api.assemblyai.com/v2';
-const tabCache = { at: 0, video: null, short: null };
+const tabCache = new Map();
 
 function bad(status, message) {
   const err = new Error(message);
@@ -49,7 +49,7 @@ async function writeState(deps, state) {
   await deps.storagePut(STATE_PATH, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }));
 }
 
-async function browse(type) {
+async function browse(channelId, type) {
   const response = await fetch('https://www.youtube.com/youtubei/v1/browse?prettyPrint=false', {
     method: 'POST',
     headers: {
@@ -57,7 +57,7 @@ async function browse(type) {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     },
     body: JSON.stringify({
-      browseId: CHANNEL,
+      browseId: channelId,
       params: TABS[type],
       context: { client: { clientName: 'WEB', clientVersion: '2.20251101.00.00', hl: 'en', gl: 'US' } },
     }),
@@ -89,11 +89,12 @@ function channelItems(data, type) {
   return rows;
 }
 
-async function listTab(type) {
-  if (tabCache[type] && Date.now() - tabCache.at < 60000) return tabCache[type];
-  const rows = channelItems(await browse(type), type);
-  tabCache[type] = rows;
-  tabCache.at = Date.now();
+async function listTab(channelId, type) {
+  const key = `${channelId}:${type}`;
+  const hit = tabCache.get(key);
+  if (hit && Date.now() - hit.at < 60000) return hit.rows;
+  const rows = channelItems(await browse(channelId, type), type);
+  tabCache.set(key, { at: Date.now(), rows });
   return rows;
 }
 
@@ -118,7 +119,8 @@ async function newUploads(deps) {
   }
   const added = new Set(addedIds.map((item) => item.id));
   const failed = new Set(state.failed);
-  const [videos, shorts] = await Promise.all([listTab('video'), listTab('short')]);
+  const channelId = deps.channelId;
+  const [videos, shorts] = await Promise.all([listTab(channelId, 'video'), listTab(channelId, 'short')]);
   return {
     videos: leadingNew(videos, known, failed, added),
     shorts: leadingNew(shorts, known, failed, added),
@@ -331,12 +333,14 @@ async function uploadStatus(deps, id) {
     await writeState(deps, next);
     return { phase: 'skipped', id, detail: 'The transcript was empty, so it was not added.' };
   }
+  const owner = channels.byId(deps.channelId);
   await deps.ingest({
     title: job.title,
     videoId: id,
     type: job.type,
     transcript: 'universal-2',
     language: transcript.language_code || '',
+    channel: owner ? owner.key : 'ahl',
     chunks,
   });
   next.added = (next.added || []).filter((item) => item.id !== id);

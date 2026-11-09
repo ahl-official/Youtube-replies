@@ -1,5 +1,19 @@
 const app = document.querySelector('#app');
-const state = { page: 'review', status: 'needs_human', handled: 'false', query: '', key: '', notice: '', noticeKind: '' };
+const CHANNELS = {
+  ahl: { name: 'American Hairline' },
+  alchemane: { name: 'Alchemane' },
+};
+const savedChannel = localStorage.getItem('desk-channel');
+const state = {
+  page: 'review',
+  status: 'needs_human',
+  handled: 'false',
+  query: '',
+  key: '',
+  notice: '',
+  noticeKind: '',
+  channel: savedChannel === 'alchemane' ? 'alchemane' : 'ahl',
+};
 let health = null;
 let summary = {};
 
@@ -35,11 +49,36 @@ async function api(pathname, options = {}) {
   return data;
 }
 
+function withChannel(pathname) {
+  const join = pathname.includes('?') ? '&' : '?';
+  return `${pathname}${join}channel=${encodeURIComponent(state.channel)}`;
+}
+
+function selectChannel(key) {
+  if (!CHANNELS[key] || key === state.channel) return;
+  state.channel = key;
+  state.key = '';
+  state.notice = '';
+  state.noticeKind = '';
+  localStorage.setItem('desk-channel', key);
+  render();
+}
+
+function paintChannel() {
+  for (const button of document.querySelectorAll('[data-channel]')) {
+    const on = button.dataset.channel === state.channel;
+    button.className = on ? 'active' : '';
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
 function ensureShell() {
   if (app.querySelector('.shell')) return;
   app.replaceChildren(h('div', { class: 'shell' }, [
     h('aside', { class: 'rail' }, [
-      h('div', { class: 'brand' }, ['American Hairline', h('span', {}, ['Comment desk'])]),
+      h('div', { class: 'brand-switch', role: 'group', 'aria-label': 'Channel' }, [
+        h('button', { type: 'button', 'data-channel': 'ahl', onclick: () => selectChannel('ahl') }, ['American Hairline']),
+        h('button', { type: 'button', 'data-channel': 'alchemane', onclick: () => selectChannel('alchemane') }, ['Alchemane']),
+      ]),
       h('nav', { class: 'nav', 'aria-label': 'Desk' }, [
         h('button', { id: 'nav-review', type: 'button', onclick: () => go('review') }, ['Review', h('small', {}, ['Comments waiting on a person'])]),
         h('button', { id: 'nav-knowledge', type: 'button', onclick: () => go('knowledge') }, ['Knowledge', h('small', {}, ['Videos and documents'])]),
@@ -68,6 +107,7 @@ function layout(title, lede, body, kicker = 'YouTube reply desk') {
   else review.removeAttribute('aria-current');
   if (state.page === 'knowledge') knowledge.setAttribute('aria-current', 'page');
   else knowledge.removeAttribute('aria-current');
+  paintChannel();
   const status = h('p', { id: 'status', class: 'status' + (state.noticeKind ? ' ' + state.noticeKind : ''), role: 'status', 'aria-live': 'polite' }, [state.notice]);
   app.querySelector('.main').replaceChildren(
     h('p', { class: 'kicker' }, [kicker]),
@@ -146,7 +186,7 @@ async function renderReview() {
       'The comment_log table is missing. Run the bottom of schema.sql in the Supabase SQL editor, then reload this page.',
     ]));
   } else {
-    const data = await api(`/api/comments?status=${encodeURIComponent(state.status)}`);
+    const data = await api(withChannel(`/api/comments?status=${encodeURIComponent(state.status)}`));
     summary = data.summary || {};
     setStatus('');
     if (health.webhook) {
@@ -165,7 +205,9 @@ async function renderReview() {
   }
   layout(
     'YouTube reply desk',
-    'Click Review comments to check the last 48 hours. Post reply publishes that one reply on YouTube.',
+    CHANNELS[state.channel].name === 'Alchemane'
+      ? 'Click Review comments to check the last 48 hours on Alchemane. Post and Discard run on Alchemane once that YouTube account is connected.'
+      : 'Click Review comments to check the last 48 hours. Post reply publishes that one reply on YouTube.',
     body,
     'Comments',
   );
@@ -180,12 +222,12 @@ async function reviewNow(event) {
     let reviewed = 0;
     let summaryNow = {};
     for (let batch = 0; batch < 6; batch += 1) {
-      const start = await api('/api/reply/run', { method: 'POST' });
+      const start = await api('/api/reply/run', { method: 'POST', body: { channel: state.channel } });
       let status = null;
       const deadline = Date.now() + 8 * 60 * 1000;
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 4000));
-        status = await api(`/api/reply/status?since=${encodeURIComponent(start.startedAt)}`);
+        status = await api(withChannel(`/api/reply/status?since=${encodeURIComponent(start.startedAt)}`));
         if (status.done) break;
       }
       if (!status || !status.done) throw new Error('The review is still running. Refresh Drafts in a minute.');
@@ -332,7 +374,7 @@ function commentCard(row) {
       row.status === 'discarded' ? h('span') : h('button', {
         class: 'btn danger',
         onclick: async (event) => {
-          const sure = window.confirm('Are you sure? This deletes the comment from the American Hairline channel.');
+          const sure = window.confirm(`Are you sure? This removes the comment from the ${CHANNELS[state.channel].name} channel.`);
           if (!sure) return;
           const button = event.currentTarget;
           button.disabled = true;
@@ -415,13 +457,13 @@ async function addUploads(type, items) {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       setStatus(`Adding ${index + 1} of ${items.length} ${items.length === 1 ? noun : plural}. Downloading audio…`, 'loading');
-      await api('/api/knowledge/uploads', { method: 'POST', body: { id: item.id, type: item.type } });
+      await api('/api/knowledge/uploads', { method: 'POST', body: { id: item.id, type: item.type, channel: state.channel } });
       const deadline = Date.now() + 20 * 60 * 1000;
       let result = { phase: 'transcribing' };
       while (result.phase === 'transcribing' && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5000));
         setStatus(`Adding ${index + 1} of ${items.length} ${items.length === 1 ? noun : plural}. Transcribing…`, 'loading');
-        result = await api(`/api/knowledge/uploads?id=${encodeURIComponent(item.id)}`);
+        result = await api(withChannel(`/api/knowledge/uploads?id=${encodeURIComponent(item.id)}`));
       }
       if (result.phase === 'done') added += 1;
       else if (result.phase === 'skipped') skipped += 1;
@@ -449,7 +491,7 @@ async function renderKnowledge() {
     body.append(h('div', { class: 'banner error' }, ['The n8n ingest webhook key is missing, so edits cannot be re-embedded.']));
   }
   if (state.key) {
-    const data = await api(`/api/knowledge?key=${encodeURIComponent(state.key)}`);
+    const data = await api(withChannel(`/api/knowledge?key=${encodeURIComponent(state.key)}`));
     body.append(editor(data.group));
     setStatus('');
     layout('Edit knowledge', 'Saving sends the text through the ingest webhook, which rebuilds the embeddings. The previous chunks are removed after the new ones land.', body);
@@ -457,8 +499,8 @@ async function renderKnowledge() {
   }
   setStatus('');
   const [data, uploads] = await Promise.all([
-    api(`/api/knowledge?q=${encodeURIComponent(state.query)}`),
-    api('/api/knowledge/uploads').catch((err) => ({ error: err.message, videos: [], shorts: [] })),
+    api(withChannel(`/api/knowledge?q=${encodeURIComponent(state.query)}`)),
+    api(withChannel('/api/knowledge/uploads')).catch((err) => ({ error: err.message, videos: [], shorts: [] })),
   ]);
   const list = h('div');
   const banner = uploadBanner(uploads);
@@ -548,7 +590,7 @@ async function addDocument(event) {
   note.textContent = 'Sending to the ingest webhook…';
   setStatus('Sending to the ingest webhook…', 'loading');
   try {
-    await api('/api/knowledge', { method: 'POST', body: { title: data.get('title'), text: data.get('text') } });
+    await api('/api/knowledge', { method: 'POST', body: { title: data.get('title'), text: data.get('text'), channel: state.channel } });
     event.target.reset();
     note.textContent = 'Added. It will show in the list in a few seconds, once n8n finishes the embedding.';
     setStatus('Document added.');
@@ -570,7 +612,7 @@ async function saveGroup(event, group) {
     url: area.dataset.url || '',
   }));
   try {
-    await api('/api/knowledge', { method: 'PUT', body: { key: group.key, chunks } });
+    await api('/api/knowledge', { method: 'PUT', body: { key: group.key, chunks, channel: state.channel } });
     note.textContent = 'Saved.';
     setStatus('Knowledge saved.');
     state.key = '';
@@ -582,7 +624,7 @@ async function saveGroup(event, group) {
 
 async function removeGroup(group) {
   if (!confirm(`Remove “${group.title}” from the knowledge base?`)) return;
-  await api(`/api/knowledge?key=${encodeURIComponent(group.key)}`, { method: 'DELETE' });
+  await api(withChannel(`/api/knowledge?key=${encodeURIComponent(group.key)}`), { method: 'DELETE' });
   state.key = '';
   render();
 }
