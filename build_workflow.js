@@ -111,6 +111,81 @@ Respond with ONLY a JSON object. No explanation, no reasoning and no markdown be
 
 const systemMessage = `={{ 'You are the community manager for the YouTube channel "' + $('Config').first().json.channelName + '", which posts educational content about ' + $('Config').first().json.topic + '.\\n\\n' + ${JSON.stringify(systemPrompt)} }}`;
 
+function channelSwitch(id, name, position, hookName) {
+  return {
+    parameters: {
+      conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        conditions: [{
+          id: id + 'c',
+          leftValue: `={{ $('${hookName}').first().json.body.channelId }}`,
+          rightValue: ALC_ID,
+          operator: { type: 'string', operation: 'equals' },
+        }],
+        combinator: 'and',
+      },
+      options: {},
+    },
+    id, name, type: 'n8n-nodes-base.if', typeVersion: 2.2, position,
+  };
+}
+
+function youtubeMine(id, name, position) {
+  return {
+    parameters: {
+      url: 'https://www.googleapis.com/youtube/v3/channels',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [
+        { name: 'part', value: 'snippet' },
+        { name: 'mine', value: 'true' },
+      ]},
+      options: {},
+    },
+    id, name, type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position, onError: 'continueRegularOutput',
+  };
+}
+
+function youtubeInsert(id, name, position) {
+  return {
+    parameters: {
+      method: 'POST',
+      url: 'https://www.googleapis.com/youtube/v3/comments',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [{ name: 'part', value: 'snippet' }] },
+      sendBody: true,
+      specifyBody: 'json',
+      jsonBody: '={{ JSON.stringify({ snippet: { parentId: $json.commentId, textOriginal: $json.text } }) }}',
+      options: {},
+    },
+    id, name, type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position, onError: 'continueRegularOutput',
+  };
+}
+
+function youtubeReject(id, name, position) {
+  return {
+    parameters: {
+      method: 'POST',
+      url: 'https://www.googleapis.com/youtube/v3/comments/setModerationStatus',
+      authentication: 'predefinedCredentialType',
+      nodeCredentialType: 'youTubeOAuth2Api',
+      sendQuery: true,
+      queryParameters: { parameters: [
+        { name: 'id', value: '={{ $json.commentId }}' },
+        { name: 'moderationStatus', value: 'rejected' },
+      ]},
+      options: { response: { response: { responseFormat: 'text' } } },
+    },
+    id, name, type: 'n8n-nodes-base.httpRequest',
+    typeVersion: 4.2, position, onError: 'continueRegularOutput',
+  };
+}
+
 const nodes = [
   {
     parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 5 }] } },
@@ -146,21 +221,9 @@ const nodes = [
     position: [0, 720], webhookId: 'ahl-post-reply',
     credentials: { httpHeaderAuth: { id: 'EBYqE8OYpGo83wMT', name: 'AHL Ingest Webhook Key' } },
   },
-  {
-    parameters: {
-      url: 'https://www.googleapis.com/youtube/v3/channels',
-      authentication: 'predefinedCredentialType',
-      nodeCredentialType: 'youTubeOAuth2Api',
-      sendQuery: true,
-      queryParameters: { parameters: [
-        { name: 'part', value: 'snippet' },
-        { name: 'mine', value: 'true' },
-      ]},
-      options: {},
-    },
-    id: 'n1d', name: 'Posting Channel', type: 'n8n-nodes-base.httpRequest',
-    typeVersion: 4.2, position: [220, 720], onError: 'continueRegularOutput',
-  },
+  channelSwitch('n1c1', 'Post Account?', [220, 720], 'Post One Reply Hook'),
+  youtubeMine('n1d', 'Posting Channel', [440, 640]),
+  youtubeMine('n1d2', 'Posting Channel Alchemane', [440, 820]),
   {
     parameters: {
       jsCode: `const raw = $input.first().json;
@@ -179,7 +242,7 @@ if (mine.id !== expected) {
 }
 return [{ json: { blocked: false, commentId: hook.commentId, text: hook.text } }];`,
     },
-    id: 'n1e', name: 'Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [440, 720],
+    id: 'n1e', name: 'Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [660, 720],
   },
   {
     parameters: {
@@ -192,24 +255,11 @@ return [{ json: { blocked: false, commentId: hook.commentId, text: hook.text } }
       },
       options: {},
     },
-    id: 'n1f', name: 'Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [660, 720],
+    id: 'n1f', name: 'Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [880, 720],
   },
-  {
-    parameters: {
-      method: 'POST',
-      url: 'https://www.googleapis.com/youtube/v3/comments',
-      authentication: 'predefinedCredentialType',
-      nodeCredentialType: 'youTubeOAuth2Api',
-      sendQuery: true,
-      queryParameters: { parameters: [{ name: 'part', value: 'snippet' }] },
-      sendBody: true,
-      specifyBody: 'json',
-      jsonBody: '={{ JSON.stringify({ snippet: { parentId: $json.commentId, textOriginal: $json.text } }) }}',
-      options: {},
-    },
-    id: 'n12b', name: 'Post One Reply', type: 'n8n-nodes-base.httpRequest',
-    typeVersion: 4.2, position: [880, 640], onError: 'continueRegularOutput',
-  },
+  channelSwitch('n1f2', 'Post With?', [1100, 640], 'Post One Reply Hook'),
+  youtubeInsert('n12b', 'Post One Reply', [1320, 560]),
+  youtubeInsert('n12b2', 'Post One Reply Alchemane', [1320, 760]),
   {
     parameters: {
       jsCode: `const item = $input.first().json;
@@ -229,7 +279,7 @@ if (author && author !== expected) {
 if (!item.id) return [{ json: { ok: false, error: 'YouTube did not return a reply id' } }];
 return [{ json: { ok: true, id: item.id } }];`,
     },
-    id: 'n12c', name: 'Post One Reply Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1100, 720],
+    id: 'n12c', name: 'Post One Reply Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1540, 720],
   },
   {
     parameters: {
@@ -240,24 +290,12 @@ return [{ json: { ok: true, id: item.id } }];`,
       options: {},
     },
     id: 'n1g', name: 'Delete Comment Hook', type: 'n8n-nodes-base.webhook', typeVersion: 2,
-    position: [0, 960], webhookId: 'ahl-delete-comment',
+    position: [0, 1080], webhookId: 'ahl-delete-comment',
     credentials: { httpHeaderAuth: { id: 'EBYqE8OYpGo83wMT', name: 'AHL Ingest Webhook Key' } },
   },
-  {
-    parameters: {
-      url: 'https://www.googleapis.com/youtube/v3/channels',
-      authentication: 'predefinedCredentialType',
-      nodeCredentialType: 'youTubeOAuth2Api',
-      sendQuery: true,
-      queryParameters: { parameters: [
-        { name: 'part', value: 'snippet' },
-        { name: 'mine', value: 'true' },
-      ]},
-      options: {},
-    },
-    id: 'n1h', name: 'Delete Channel', type: 'n8n-nodes-base.httpRequest',
-    typeVersion: 4.2, position: [220, 960], onError: 'continueRegularOutput',
-  },
+  channelSwitch('n1g1', 'Delete Account?', [220, 1080], 'Delete Comment Hook'),
+  youtubeMine('n1h', 'Delete Channel', [440, 1000]),
+  youtubeMine('n1h2', 'Delete Channel Alchemane', [440, 1180]),
   {
     parameters: {
       jsCode: `const raw = $input.first().json;
@@ -276,7 +314,7 @@ if (mine.id !== expected) {
 }
 return [{ json: { blocked: false, commentId: hook.commentId } }];`,
     },
-    id: 'n1i', name: 'Delete Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [440, 960],
+    id: 'n1i', name: 'Delete Channel Check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [660, 1080],
   },
   {
     parameters: {
@@ -289,24 +327,11 @@ return [{ json: { blocked: false, commentId: hook.commentId } }];`,
       },
       options: {},
     },
-    id: 'n1j', name: 'Delete Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [660, 960],
+    id: 'n1j', name: 'Delete Right Channel?', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [880, 1080],
   },
-  {
-    parameters: {
-      method: 'POST',
-      url: 'https://www.googleapis.com/youtube/v3/comments/setModerationStatus',
-      authentication: 'predefinedCredentialType',
-      nodeCredentialType: 'youTubeOAuth2Api',
-      sendQuery: true,
-      queryParameters: { parameters: [
-        { name: 'id', value: '={{ $json.commentId }}' },
-        { name: 'moderationStatus', value: 'rejected' },
-      ]},
-      options: { response: { response: { responseFormat: 'text' } } },
-    },
-    id: 'n1k', name: 'Delete on YouTube', type: 'n8n-nodes-base.httpRequest',
-    typeVersion: 4.2, position: [880, 880], onError: 'continueRegularOutput',
-  },
+  channelSwitch('n1j2', 'Delete With?', [1100, 1000], 'Delete Comment Hook'),
+  youtubeReject('n1k', 'Delete on YouTube', [1320, 920]),
+  youtubeReject('n1k2', 'Delete on YouTube Alchemane', [1320, 1120]),
   {
     parameters: {
       jsCode: `const item = $input.first().json;
@@ -319,7 +344,7 @@ if (item.error) {
 }
 return [{ json: { ok: true } }];`,
     },
-    id: 'n1l', name: 'Delete Comment Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1100, 960],
+    id: 'n1l', name: 'Delete Comment Result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1540, 1080],
   },
   {
     parameters: {
@@ -520,16 +545,24 @@ const connections = {
   'Every 5 Minutes': { main: [[main('Active Channel')]] },
   'Review Comments': { main: [[main('Active Channel')]] },
   'Active Channel': { main: [[main('Config')]] },
-  'Post One Reply Hook': { main: [[main('Posting Channel')]] },
+  'Post One Reply Hook': { main: [[main('Post Account?')]] },
+  'Post Account?': { main: [[main('Posting Channel Alchemane')], [main('Posting Channel')]] },
   'Posting Channel': { main: [[main('Channel Check')]] },
+  'Posting Channel Alchemane': { main: [[main('Channel Check')]] },
   'Channel Check': { main: [[main('Right Channel?')]] },
-  'Right Channel?': { main: [[main('Post One Reply')], [main('Post One Reply Result')]] },
+  'Right Channel?': { main: [[main('Post With?')], [main('Post One Reply Result')]] },
+  'Post With?': { main: [[main('Post One Reply Alchemane')], [main('Post One Reply')]] },
   'Post One Reply': { main: [[main('Post One Reply Result')]] },
-  'Delete Comment Hook': { main: [[main('Delete Channel')]] },
+  'Post One Reply Alchemane': { main: [[main('Post One Reply Result')]] },
+  'Delete Comment Hook': { main: [[main('Delete Account?')]] },
+  'Delete Account?': { main: [[main('Delete Channel Alchemane')], [main('Delete Channel')]] },
   'Delete Channel': { main: [[main('Delete Channel Check')]] },
+  'Delete Channel Alchemane': { main: [[main('Delete Channel Check')]] },
   'Delete Channel Check': { main: [[main('Delete Right Channel?')]] },
-  'Delete Right Channel?': { main: [[main('Delete on YouTube')], [main('Delete Comment Result')]] },
+  'Delete Right Channel?': { main: [[main('Delete With?')], [main('Delete Comment Result')]] },
+  'Delete With?': { main: [[main('Delete on YouTube Alchemane')], [main('Delete on YouTube')]] },
   'Delete on YouTube': { main: [[main('Delete Comment Result')]] },
+  'Delete on YouTube Alchemane': { main: [[main('Delete Comment Result')]] },
   'Config': { main: [[main('Fetch Channel Comments')]] },
   'Fetch Channel Comments': { main: [[main('Filter New Comments')]] },
   'Filter New Comments': { main: [[main('Video Chunks')]] },

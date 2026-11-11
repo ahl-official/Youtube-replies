@@ -12,17 +12,38 @@
 const fs = require('fs'), path = require('path'), os = require('os');
 const { spawnSync } = require('child_process');
 
-const TABS = [
-  { type: 'video', url: 'https://www.youtube.com/@AmericanHairline/videos' },
-  { type: 'short', url: 'https://www.youtube.com/@AmericanHairline/shorts' },
-];
+const CHANNELS = {
+  ahl: {
+    key: 'ahl',
+    state: 'ingested.json',
+    tabs: [
+      { type: 'video', url: 'https://www.youtube.com/@AmericanHairline/videos' },
+      { type: 'short', url: 'https://www.youtube.com/@AmericanHairline/shorts' },
+    ],
+  },
+  alchemane: {
+    key: 'alchemane',
+    state: 'ingested-alchemane.json',
+    tabs: [
+      { type: 'video', url: 'https://www.youtube.com/@AlchemaneHairExtensions/videos' },
+      { type: 'short', url: 'https://www.youtube.com/@AlchemaneHairExtensions/shorts' },
+    ],
+  },
+};
+const channelKey = (process.argv.find((a) => a.startsWith('--channel=')) || '--channel=ahl').slice(10);
+const channel = CHANNELS[channelKey];
+if (!channel) {
+  console.error('Unknown channel. Use --channel=ahl or --channel=alchemane');
+  process.exit(1);
+}
+const TABS = channel.tabs;
 const LIMIT = +((process.argv.find((a) => a.startsWith('--limit=')) || '--limit=10').slice(8));
 const ONLY = (process.argv.find((a) => a.startsWith('--id=')) || '').slice(5);
 const PAUSE_MS = 8000;
 const WORDS_PER_CHUNK = 350;
 const TRANSCRIPT_TAG = 'universal-2';
 const AAI = 'https://api.assemblyai.com/v2';
-const STATE = path.join(__dirname, 'ingested.json');
+const STATE = path.join(__dirname, channel.state);
 
 const envFile = ['.env', '.env.txt'].map((f) => path.join(__dirname, f)).find(fs.existsSync);
 const env = {};
@@ -250,6 +271,7 @@ function chunkWords(words, id, type) {
         type: v.type,
         transcript: TRANSCRIPT_TAG,
         language,
+        channel: channel.key,
         chunks,
       }),
     });

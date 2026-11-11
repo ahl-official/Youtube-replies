@@ -210,9 +210,7 @@ async function renderReview() {
   }
   layout(
     'YouTube reply desk',
-    CHANNELS[state.channel].name === 'Alchemane'
-      ? 'Click Review comments to check the last 48 hours on Alchemane. Post and Discard run on Alchemane once that YouTube account is connected.'
-      : 'Click Review comments to check the last 48 hours. Post reply publishes that one reply on YouTube.',
+    'Click Review comments to check the last 48 hours. Post reply publishes that one reply on ' + CHANNELS[state.channel].name + '.',
     body,
     'Comments',
   );

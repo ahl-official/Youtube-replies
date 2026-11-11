@@ -11,6 +11,13 @@ const fresh = JSON.parse(fs.readFileSync(path.join(__dirname, 'workflow.json'), 
 (async () => {
   const wf = await (await fetch(`${base}/api/v1/workflows/${ID}`, { headers: H })).json();
   const liveCred = (name) => (wf.nodes.find((n) => n.name === name) || {}).credentials;
+  const alchemane = { youTubeOAuth2Api: { id: 'Wfa8VQmQLzMrEbRS', name: 'YouTube Alchemene' } };
+  const pin = {
+    'Posting Channel Alchemane': alchemane,
+    'Post One Reply Alchemane': alchemane,
+    'Delete Channel Alchemane': alchemane,
+    'Delete on YouTube Alchemane': alchemane,
+  };
   const borrow = {
     'Post Reply to YouTube': 'Fetch Channel Comments',
     'Posting Channel': 'Fetch Channel Comments',
@@ -22,12 +29,16 @@ const fresh = JSON.parse(fs.readFileSync(path.join(__dirname, 'workflow.json'), 
     'Video Chunks': 'Knowledge Base (Supabase)',
   };
   for (const n of fresh.nodes) {
-    const c = liveCred(n.name) || (borrow[n.name] && liveCred(borrow[n.name]));
+    const c = pin[n.name] || liveCred(n.name) || (borrow[n.name] && liveCred(borrow[n.name]));
     if (c) n.credentials = c;
     else if (/Supabase|YouTube|Fetch|Chat Model|Embeddings|Log:/.test(n.name)) console.log('! no credential found for', n.name);
   }
   const r = await fetch(`${base}/api/v1/workflows/${ID}`, { method: 'PUT', headers: H,
     body: JSON.stringify({ name: fresh.name, nodes: fresh.nodes, connections: fresh.connections, settings: { executionOrder: 'v1' } }) });
   const body = await r.json().catch(() => ({}));
-  console.log('status', r.status, r.ok ? '' : JSON.stringify(body).slice(0, 500));
+  console.log('status', r.status, r.ok ? 'active ' + body.active : JSON.stringify(body).slice(0, 500));
+  if (r.ok && body.active === false) {
+    const a = await fetch(`${base}/api/v1/workflows/${ID}/activate`, { method: 'POST', headers: H });
+    console.log('reactivate', a.status);
+  }
 })();
