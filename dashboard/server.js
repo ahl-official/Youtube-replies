@@ -400,10 +400,39 @@ async function saveVideoChannels() {
   await channelDeps(channels.byKey('ahl').channelId).storagePut('video-channels.json', body);
 }
 
+async function channelFromDocuments(videoId) {
+  const rows = await sb(`/documents?select=metadata&metadata->>videoId=eq.${encodeURIComponent(videoId)}&limit=1`);
+  const meta = rows && rows[0] && rows[0].metadata;
+  if (!meta) return '';
+  if (meta.channel === 'alchemane') return channels.byKey('alchemane').channelId;
+  if (meta.channel === 'ahl' || meta.videoId) return channels.byKey('ahl').channelId;
+  return '';
+}
+
+async function rememberVideos(videoIds, channelId) {
+  const ids = [...new Set((videoIds || []).filter(Boolean))];
+  if (!channelId || !ids.length) return;
+  await loadVideoChannels();
+  let changed = false;
+  for (const id of ids) {
+    if (videoChannels.get(id) !== channelId) {
+      videoChannels.set(id, channelId);
+      changed = true;
+    }
+  }
+  if (changed) await saveVideoChannels().catch(() => {});
+}
+
 async function channelIdForVideo(videoId) {
   if (!videoId) return '';
   await loadVideoChannels();
   if (videoChannels.has(videoId)) return videoChannels.get(videoId);
+  const fromDocs = await channelFromDocuments(videoId).catch(() => '');
+  if (fromDocs) {
+    videoChannels.set(videoId, fromDocs);
+    await saveVideoChannels().catch(() => {});
+    return fromDocs;
+  }
   const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -496,11 +525,11 @@ async function startReplyRun(channel) {
   throw lastError || new Error('The review webhook did not start');
 }
 
-function reviewedCount(execution) {
+function reviewedItems(execution) {
   const runs = (((execution.data || {}).resultData || {}).runData || {})['Filter New Comments'] || [];
   const last = runs[runs.length - 1];
   const items = last && last.data && last.data.main && last.data.main[0];
-  return Array.isArray(items) ? items.length : 0;
+  return Array.isArray(items) ? items.map((item) => item.json || {}) : [];
 }
 
 async function replyRunStatus(startedAt, channel) {
@@ -513,7 +542,9 @@ async function replyRunStatus(startedAt, channel) {
   const row = (list.data || []).find((item) => item.startedAt && item.startedAt >= startedAt);
   if (!row || ['running', 'waiting', 'new'].includes(row.status)) return { done: false };
   const full = await n8n(`/api/v1/executions/${row.id}?includeData=true`);
-  return { done: true, status: row.status, reviewed: reviewedCount(full), summary: await commentSummary(channel) };
+  const items = reviewedItems(full);
+  await rememberVideos(items.map((item) => item.videoId), channel && channel.channelId);
+  return { done: true, status: row.status, reviewed: items.length, summary: await commentSummary(channel) };
 }
 
 async function commentSummary(channel) {
