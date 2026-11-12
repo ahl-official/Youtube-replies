@@ -736,7 +736,6 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/knowledge') {
     const selected = deskChannel(url.searchParams.get('channel'));
     const docs = await allDocuments();
-    await resolveVideos(docs.map((row) => row.metadata && row.metadata.videoId));
     const groups = groupRows(docs.filter((row) => rowMatchesChannel(row, selected)));
     const key = url.searchParams.get('key');
     if (key) {
@@ -775,7 +774,6 @@ async function handleApi(req, res, url) {
     if (!key || !chunks.length) return send(res, 400, { error: 'Add some text before saving' });
     const selected = deskChannel(body.channel);
     const rows = await allDocuments();
-    await resolveVideos(rows.map((row) => row.metadata && row.metadata.videoId));
     const current = findGroup(rows.filter((row) => rowMatchesChannel(row, selected)), key);
     if (!current) return send(res, 404, { error: 'That entry is gone' });
     const previousMaxId = rows.reduce((max, row) => Math.max(max, row.id), 0);
@@ -808,7 +806,6 @@ async function handleApi(req, res, url) {
     const selected = deskChannel(url.searchParams.get('channel'));
     const key = url.searchParams.get('key') || '';
     const rows = await allDocuments();
-    await resolveVideos(rows.map((row) => row.metadata && row.metadata.videoId));
     const current = findGroup(rows.filter((row) => rowMatchesChannel(row, selected)), key);
     if (!current) return send(res, 404, { error: 'That entry is already gone' });
     await removeIds(current.chunks.map((chunk) => chunk.id));
