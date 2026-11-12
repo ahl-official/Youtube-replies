@@ -148,8 +148,9 @@ async function allDocuments(options = {}) {
 
 function groupKey(metadata) {
   const type = metadata.type || (metadata.videoId ? 'video' : 'document');
+  const brand = metadata.channel === 'alchemane' ? 'alchemane' : 'ahl';
   if (metadata.videoId) return `video:${metadata.videoId}`;
-  return `doc:${type}:${metadata.title || 'Untitled'}`;
+  return `doc:${brand}:${type}:${metadata.title || 'Untitled'}`;
 }
 
 function groupRows(rows) {
@@ -379,19 +380,28 @@ async function n8n(pathname, options = {}) {
 }
 
 const videoChannels = new Map();
-let videoChannelsLoaded = false;
+const commentChannels = new Map();
+let deskStateLoaded = false;
 
-async function loadVideoChannels() {
-  if (videoChannelsLoaded) return;
-  videoChannelsLoaded = true;
+async function loadDeskState() {
+  if (deskStateLoaded) return;
+  deskStateLoaded = true;
   try {
-    const text = await channelDeps(channels.byKey('ahl').channelId).storageGet('video-channels.json');
-    const data = text ? JSON.parse(text) : {};
-    for (const [videoId, channelId] of Object.entries(data)) {
+    const storage = channelDeps(channels.byKey('ahl').channelId);
+    const [videoText, commentText] = await Promise.all([
+      storage.storageGet('video-channels.json'),
+      storage.storageGet('comment-channels.json').catch((error) => (error.message.includes('404') ? '' : Promise.reject(error))),
+    ]);
+    const videos = videoText ? JSON.parse(videoText) : {};
+    for (const [videoId, channelId] of Object.entries(videos)) {
       if (videoId && channelId) videoChannels.set(videoId, channelId);
     }
+    const comments = commentText ? JSON.parse(commentText) : {};
+    for (const [commentId, key] of Object.entries(comments)) {
+      if (commentId && (key === 'ahl' || key === 'alchemane')) commentChannels.set(commentId, key);
+    }
   } catch {
-    videoChannelsLoaded = false;
+    deskStateLoaded = false;
   }
 }
 
@@ -400,19 +410,24 @@ async function saveVideoChannels() {
   await channelDeps(channels.byKey('ahl').channelId).storagePut('video-channels.json', body);
 }
 
+async function saveCommentChannels() {
+  const body = JSON.stringify(Object.fromEntries(commentChannels));
+  await channelDeps(channels.byKey('ahl').channelId).storagePut('comment-channels.json', body);
+}
+
 async function channelFromDocuments(videoId) {
   const rows = await sb(`/documents?select=metadata&metadata->>videoId=eq.${encodeURIComponent(videoId)}&limit=1`);
   const meta = rows && rows[0] && rows[0].metadata;
   if (!meta) return '';
   if (meta.channel === 'alchemane') return channels.byKey('alchemane').channelId;
-  if (meta.channel === 'ahl' || meta.videoId) return channels.byKey('ahl').channelId;
+  if (meta.channel === 'ahl') return channels.byKey('ahl').channelId;
   return '';
 }
 
 async function rememberVideos(videoIds, channelId) {
   const ids = [...new Set((videoIds || []).filter(Boolean))];
   if (!channelId || !ids.length) return;
-  await loadVideoChannels();
+  await loadDeskState();
   let changed = false;
   for (const id of ids) {
     if (videoChannels.get(id) !== channelId) {
@@ -423,9 +438,23 @@ async function rememberVideos(videoIds, channelId) {
   if (changed) await saveVideoChannels().catch(() => {});
 }
 
+async function rememberComments(commentIds, channelKey) {
+  const ids = [...new Set((commentIds || []).filter(Boolean))];
+  if ((channelKey !== 'ahl' && channelKey !== 'alchemane') || !ids.length) return;
+  await loadDeskState();
+  let changed = false;
+  for (const id of ids) {
+    if (commentChannels.get(id) !== channelKey) {
+      commentChannels.set(id, channelKey);
+      changed = true;
+    }
+  }
+  if (changed) await saveCommentChannels().catch(() => {});
+}
+
 async function channelIdForVideo(videoId) {
   if (!videoId) return '';
-  await loadVideoChannels();
+  await loadDeskState();
   if (videoChannels.has(videoId)) return videoChannels.get(videoId);
   const fromDocs = await channelFromDocuments(videoId).catch(() => '');
   if (fromDocs) {
@@ -451,9 +480,9 @@ async function channelIdForVideo(videoId) {
 }
 
 async function resolveVideos(ids) {
-  const missing = [...new Set(ids.filter(Boolean))].filter((id) => !videoChannels.has(id));
-  await loadVideoChannels();
-  const pending = missing.filter((id) => !videoChannels.has(id));
+  const unique = [...new Set(ids.filter(Boolean))];
+  await loadDeskState();
+  const pending = unique.filter((id) => !videoChannels.has(id));
   for (let i = 0; i < pending.length; i += 4) {
     await Promise.all(pending.slice(i, i + 4).map((id) => channelIdForVideo(id).catch(() => '')));
   }
@@ -472,18 +501,35 @@ async function commentPage() {
     rows.push(...(page || []));
     if (!page || page.length < 1000) break;
   }
+  await loadDeskState();
   await resolveVideos(rows.map((row) => row.video_id));
+  const missing = rows.filter((row) => row.comment_id && !commentChannels.has(row.comment_id));
+  if (missing.length) {
+    let changed = false;
+    for (const row of missing) {
+      const owner = channels.byId(videoChannels.get(row.video_id));
+      if (!owner) continue;
+      commentChannels.set(row.comment_id, owner.key);
+      changed = true;
+    }
+    if (changed) await saveCommentChannels().catch(() => {});
+  }
   return rows;
 }
 
+function rowChannelKey(row) {
+  const saved = commentChannels.get(row.comment_id);
+  if (saved === 'ahl' || saved === 'alchemane') return saved;
+  const meta = row.metadata || {};
+  if (meta.channel === 'ahl' || meta.channel === 'alchemane') return meta.channel;
+  const videoId = row.video_id || meta.videoId || '';
+  if (!videoId) return '';
+  const owner = channels.byId(videoChannels.get(videoId));
+  return owner ? owner.key : '';
+}
+
 function rowMatchesChannel(row, channel) {
-  const tagged = row.metadata && (row.metadata.channel === 'ahl' || row.metadata.channel === 'alchemane');
-  if (tagged) return row.metadata.channel === channel.key;
-  const videoId = row.video_id || (row.metadata && row.metadata.videoId) || '';
-  if (!videoId) return channel.key === 'ahl';
-  const found = videoChannels.get(videoId);
-  if (!found) return channel.key === 'ahl';
-  return found === channel.channelId;
+  return rowChannelKey(row) === channel.key;
 }
 
 function commentSummaryFrom(rows) {
@@ -544,6 +590,7 @@ async function replyRunStatus(startedAt, channel) {
   const full = await n8n(`/api/v1/executions/${row.id}?includeData=true`);
   const items = reviewedItems(full);
   await rememberVideos(items.map((item) => item.videoId), channel && channel.channelId);
+  await rememberComments(items.map((item) => item.commentId), channel && channel.key);
   return { done: true, status: row.status, reviewed: items.length, summary: await commentSummary(channel) };
 }
 
@@ -726,12 +773,13 @@ async function handleApi(req, res, url) {
       }))
       .filter((chunk) => chunk.text);
     if (!key || !chunks.length) return send(res, 400, { error: 'Add some text before saving' });
+    const selected = deskChannel(body.channel);
     const rows = await allDocuments();
-    const current = findGroup(rows, key);
+    await resolveVideos(rows.map((row) => row.metadata && row.metadata.videoId));
+    const current = findGroup(rows.filter((row) => rowMatchesChannel(row, selected)), key);
     if (!current) return send(res, 404, { error: 'That entry is gone' });
     const previousMaxId = rows.reduce((max, row) => Math.max(max, row.id), 0);
     const oldIds = current.chunks.map((chunk) => chunk.id);
-    const selected = deskChannel(body.channel);
     if (current.videoId) {
       const owner = channels.byId(await channelIdForVideo(current.videoId)) || selected;
       await ingest({
@@ -757,8 +805,11 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'DELETE' && url.pathname === '/api/knowledge') {
+    const selected = deskChannel(url.searchParams.get('channel'));
     const key = url.searchParams.get('key') || '';
-    const current = findGroup(await allDocuments(), key);
+    const rows = await allDocuments();
+    await resolveVideos(rows.map((row) => row.metadata && row.metadata.videoId));
+    const current = findGroup(rows.filter((row) => rowMatchesChannel(row, selected)), key);
     if (!current) return send(res, 404, { error: 'That entry is already gone' });
     await removeIds(current.chunks.map((chunk) => chunk.id));
     invalidateDocs();

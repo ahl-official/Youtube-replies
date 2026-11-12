@@ -23,8 +23,9 @@ try {
 } catch (e) {}
 const names = ${CHANNEL_NAMES};
 const topics = ${CHANNEL_TOPICS};
+const keys = { '${AHL_ID}': 'ahl', '${ALC_ID}': 'alchemane' };
 if (!names[channelId]) channelId = '${AHL_ID}';
-return [{ json: { channelId, channelName: names[channelId], topic: topics[channelId] } }];`;
+return [{ json: { channelId, channelKey: keys[channelId], channelName: names[channelId], topic: topics[channelId] } }];`;
 
 const filterCode = `// Keep only fresh, unanswered, top-level comments from other people.
 // A comment stays eligible for 48 hours, so a miss on the 5-minute poll can still be picked up.
@@ -104,7 +105,7 @@ Rules:
 - Reply in the SAME language and script as the comment. A Hinglish comment (Hindi written in English letters) gets a Hinglish reply, not English. Keep it friendly, under 60 words, no hashtags, at most one emoji.
 - For praise, vary the wording each time; never reuse the same sentence.
 - When the answer comes from a specific video, mention it naturally (e.g. "we cover this in our video on X").
-- Answer only for the channel named above. Ignore knowledge about the other brand.
+- Answer only for the channel named above. The knowledge tool already returns only that channel. If a result is about the other brand, ignore it.
 
 Respond with ONLY a JSON object. No explanation, no reasoning and no markdown before or after it:
 {"should_reply": true|false, "reply": "text", "confidence": 0.0-1.0, "category": "question|praise|video_request|pricing|complaint|spam|unknown|other", "reason": "short"}`;
@@ -350,6 +351,7 @@ return [{ json: { ok: true } }];`,
     parameters: {
       assignments: { assignments: [
         { id: 'a1', name: 'channelId', value: '={{ $json.channelId }}', type: 'string' },
+        { id: 'a8', name: 'channelKey', value: '={{ $json.channelKey }}', type: 'string' },
         { id: 'a6', name: 'channelName', value: '={{ $json.channelName }}', type: 'string' },
         { id: 'a7', name: 'topic', value: '={{ $json.topic }}', type: 'string' },
         { id: 'a2', name: 'minConfidence', value: 0.75, type: 'number' },
@@ -408,6 +410,7 @@ return [{ json: { ok: true } }];`,
       matchType: 'allFilters',
       filters: { conditions: [
         { keyName: 'metadata->>videoId', condition: 'eq', keyValue: '={{ $json.videoId }}' },
+        { keyName: 'metadata->>channel', condition: 'eq', keyValue: "={{ $('Config').first().json.channelKey }}" },
       ]},
     },
     id: 'n4b', name: 'Video Chunks', type: 'n8n-nodes-base.supabase', typeVersion: 1, position: [880, 300],
@@ -452,11 +455,16 @@ return comments.map((comment) => {
     parameters: {
       mode: 'retrieve-as-tool',
       toolName: 'knowledge_base',
-      toolDescription: 'Search this channel’s video transcripts and approved documents. Input: the viewer question in plain words. Ignore results about the other brand.',
+      toolDescription: 'Search only this channel’s video transcripts and approved documents. Input: the viewer question in plain words.',
       tableName: 'documents',
       topK: 5,
       includeDocumentMetadata: true,
-      options: { queryName: 'match_documents' },
+      options: {
+        queryName: 'match_documents',
+        metadata: { metadataValues: [
+          { name: 'channel', value: "={{ $('Config').first().json.channelKey }}" },
+        ]},
+      },
     },
     id: 'n7', name: 'Knowledge Base (Supabase)', type: '@n8n/n8n-nodes-langchain.vectorStoreSupabase',
     typeVersion: 1.1, position: [1020, 540],
