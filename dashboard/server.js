@@ -834,7 +834,8 @@ async function handleRequest(req, res) {
   try {
     const url = requestUrl(req);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-    const rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
+    let rel = decodeURIComponent(url.pathname === '/' ? 'index.html' : url.pathname).replace(/^[/\\]+/, '');
+    if (rel === 'privacy' || rel === 'terms') rel += '.html';
     const root = path.resolve(PUBLIC);
     const filePath = path.resolve(PUBLIC, rel);
     if (filePath !== root && !filePath.startsWith(root + path.sep)) return send(res, 403, { error: 'Forbidden' });

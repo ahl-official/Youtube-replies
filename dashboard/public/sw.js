@@ -1,7 +1,7 @@
-const CACHE = 'ahl-desk-v11';
+const CACHE = 'ahl-desk-v12';
 const SHELL = [
   '/',
-  '/styles.css?v=8',
+  '/styles.css?v=9',
   '/app.js?v=11',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
