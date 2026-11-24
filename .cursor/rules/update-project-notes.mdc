@@ -1,0 +1,13 @@
+---
+description: Update PROJECT_NOTES.md after every project change
+alwaysApply: true
+---
+
+# Keep the handoff notes current
+
+`PROJECT_NOTES.md` is the handoff for the next agent. After any change to this project — code, n8n workflow, Vercel, credentials, knowledge, or review behavior — update that file in the same turn, before the final reply.
+
+- Record what changed, the date, and the live state a new agent would otherwise get wrong.
+- Do not write secrets, API keys, client secrets, or webhook values.
+- If a change is live in n8n or Vercel but not committed, say so.
+- Replace outdated statements. Do not leave an old rule next to the new one.

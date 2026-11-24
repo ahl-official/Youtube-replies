@@ -42,7 +42,7 @@ for (const item of $input.all()) {
     const published = Date.parse(s.publishedAt || '');
     if (!published || published < cutoff) { olderThanWindow = true; break; }
     const text = (s.textOriginal || '').trim();
-    if (!text || text.length < 8) continue;
+    if (!text) continue;
     if (t.snippet.totalReplyCount > 0) continue;
     if (s.authorChannelId && s.authorChannelId.value === OWN_CHANNEL) continue;
     if (/https?:\\/\\//i.test(text)) continue;          // links = likely spam
